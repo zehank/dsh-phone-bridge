@@ -44,6 +44,10 @@ export class Bridge {
     this.labels = new Map()
     this.subscribers = new Set()
     this.lastActivity = new Map()
+    this.stats = new Map()
+    this.liveCwd = new Map()
+    this.balanceCache = null
+    this.balanceAt = 0
   }
 
   /* ── 生命周期 ───────────────────────────────────────────── */
@@ -118,6 +122,14 @@ export class Bridge {
         running: this.running.has(sid),
         lastActivity: this.lastActivity.get(sid) || 0,
       })
+    }
+    // 刚新建、还没被 prompt 激活的会话也要能选
+    for (const [sid, cwd] of this.liveCwd) {
+      if (rows.some((r) => r.id === sid)) {
+        this.liveCwd.delete(sid)
+        continue
+      }
+      rows.push({ id: sid, label: '新会话', cwd, running: false, lastActivity: Date.now() })
     }
     return rows.sort((a, b) => b.lastActivity - a.lastActivity || String(a.id).localeCompare(String(b.id)))
   }
@@ -430,6 +442,12 @@ export class Bridge {
         if (at >= 0) rows.splice(at, 1)
         this.pushRecent(sid, { role: 'user', text, time: event.time || Date.now(), seq: event.seq })
       }
+    } else if (event.type === 'turn/start') {
+      this.statOf(sid).turns += 1
+    } else if (event.type === 'step/start') {
+      this.statOf(sid).steps += 1
+    } else if (event.type === 'assistant/message') {
+      this.addUsage(sid, event.data?.usage)
     } else {
       return
     }
@@ -488,6 +506,202 @@ export class Bridge {
     this.recent.set(sid, rows)
   }
 
+  /* ── 用量统计（轮 / 步 / token / 缓存 / 上下文 / 余额） ──── */
+
+  statOf(sid) {
+    let s = this.stats.get(sid)
+    if (!s) {
+      s = { turns: 0, steps: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, lastInput: 0, seeded: false }
+      this.stats.set(sid, s)
+    }
+    return s
+  }
+
+  addUsage(sid, usage) {
+    if (!usage) return
+    const s = this.statOf(sid)
+    s.input += Number(usage.inputTokens || 0)
+    s.output += Number(usage.outputTokens || 0)
+    s.cacheRead += Number(usage.cacheReadTokens || 0)
+    s.cacheWrite += Number(usage.cacheWriteTokens || 0)
+    s.reasoning += Number(usage.reasoningTokens || 0)
+    if (usage.inputTokens) s.lastInput = Number(usage.inputTokens)
+  }
+
+  /** 第一次看这个会话时，从会话日志里补出历史总数，之后靠事件增量维护。 */
+  seedStats(sid) {
+    const s = this.statOf(sid)
+    if (s.seeded) return s
+    s.seeded = true
+    try {
+      const session = this.sessionOf(sid)
+      if (!session?.snapshotEvents) return s
+      const events = session.snapshotEvents(0, session.seq) || []
+      for (const ev of events) {
+        if (ev?.type === 'turn/start') s.turns += 1
+        else if (ev?.type === 'step/start') s.steps += 1
+        else if (ev?.type === 'assistant/message') this.addUsage(sid, ev.data?.usage)
+      }
+    } catch {}
+    return s
+  }
+
+  statsOf(sid) {
+    const id = sid || this.targetSession()
+    if (!id) return null
+    const s = this.seedStats(id)
+    let contextWindow = 0
+    try {
+      contextWindow = Number(this.sessionOf(id)?.requestContext?.()?.contextWindow || 0)
+    } catch {}
+    const cacheTotal = s.cacheRead + s.input
+    return {
+      sessionId: id,
+      turns: s.turns,
+      steps: s.steps,
+      input: s.input,
+      output: s.output,
+      cacheRead: s.cacheRead,
+      cacheWrite: s.cacheWrite,
+      reasoning: s.reasoning,
+      lastInput: s.lastInput,
+      contextWindow,
+      contextUsed: contextWindow && s.lastInput ? s.lastInput / contextWindow : 0,
+      cacheHitRate: cacheTotal ? s.cacheRead / cacheTotal : 0,
+    }
+  }
+
+  /** 余额：走 Platform 查询，缓存 60 秒，失败就返回 null（不阻塞页面）。 */
+  async balance(force = false) {
+    if (!force && this.balanceCache && Date.now() - this.balanceAt < 60_000) return this.balanceCache
+    const acct = this.ctx.get?.('deepseekAccount')
+    if (!acct?.getBalance) return null
+    try {
+      const out = await acct.getBalance({
+        version: 'phone-bridge',
+        locale: 'zh-CN',
+        timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
+      })
+      const cache = { ok: true, wallets: [], bonusWallets: [] }
+      if (out?.status === 'ready') {
+        cache.wallets = (out.value || []).map((w) => ({ currency: w.currency, balance: w.balance }))
+        cache.bonusWallets = (out.bonusWallets || []).map((w) => ({ currency: w.currency, balance: w.balance }))
+      } else if (out?.status === 'failed') {
+        cache.ok = false
+        cache.error = '查询失败'
+      } else {
+        cache.ok = false
+        cache.error = '未登录'
+      }
+      this.balanceCache = cache
+      this.balanceAt = Date.now()
+      return cache
+    } catch (e) {
+      this.balanceCache = { ok: false, error: String(e?.message || e) }
+      this.balanceAt = Date.now()
+      return this.balanceCache
+    }
+  }
+
+  /* ── 工作区 / 新会话 / 定时任务 ─────────────────────────── */
+
+  workspaces() {
+    try {
+      const reg = this.ctx.get?.('workspaceRegistry')
+      const rows = reg?.list?.() || []
+      return rows.map((w) => ({ id: w.id, path: w.path || '', title: w.title || path.basename(String(w.path || '')) || '工作区' }))
+    } catch {
+      return []
+    }
+  }
+
+  currentCwd(sid) {
+    const id = sid || this.targetSession()
+    try {
+      const session = this.sessionOf(id)
+      return session?.header?.cwd || this.liveSessions().find((r) => r.id === id)?.cwd || ''
+    } catch {
+      return ''
+    }
+  }
+
+  async setCwd({ path: dir, sessionId }) {
+    const wd = this.ctx.get?.('workingDirectory')
+    const agent = this.agentOf(sessionId || this.targetSession())
+    if (!wd?.set || !agent) throw new Error('没有可用会话')
+    const next = String(dir || '').trim()
+    if (!next) throw new Error('路径为空')
+    const real = await wd.set(agent, next, new AbortController().signal)
+    this.broadcast()
+    return { ok: true, path: real || next }
+  }
+
+  async newSession({ cwd, workspaceId }) {
+    const sc = this.ctx.get?.('sessionController')
+    if (!sc?.create) throw new Error('sessionController 不可用')
+    const value = await sc.create({
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(cwd ? { cwd } : {}),
+    })
+    const sid = value?.sessionId
+    if (!sid) throw new Error('创建失败')
+    this.store.setTarget(sid)
+    this.liveCwd.set(sid, cwd || '')
+    this.broadcast()
+    return { ok: true, sessionId: sid }
+  }
+
+  async schedules() {
+    const sch = this.ctx.get?.('schedule')
+    if (!sch?.catalog) throw new Error('schedule 服务不可用')
+    const rows = await sch.catalog()
+    return (rows || []).map((r) => ({
+      id: r.id,
+      sessionId: r.sessionId,
+      title: r.title || '',
+      prompt: r.prompt || '',
+      kind: r.kind,
+      status: r.status,
+      scheduledAt: r.scheduledAt,
+      timing:
+        r.kind === 'daily'
+          ? `每天 ${r.time}`
+          : r.kind === 'every'
+            ? `每 ${Math.round((r.everySeconds || 0) / 60)} 分钟`
+            : r.kind === 'after'
+              ? `${Math.round((r.afterSeconds || 0) / 60)} 分钟后`
+              : r.kind === 'cron'
+                ? r.expression
+                : r.kind === 'weekly'
+                  ? `每周 ${(r.weekdays || []).join(',')} ${r.time}`
+                  : r.scheduledAt,
+    }))
+  }
+
+  async createSchedule({ title, prompt, daily, everySeconds, sessionId }) {
+    const sch = this.ctx.get?.('schedule')
+    const sid = sessionId || this.targetSession()
+    if (!sch?.create || !sid) throw new Error('没有可用会话')
+    const t = String(title || '').trim()
+    const p = String(prompt || '').trim()
+    if (!t || !p) throw new Error('标题和内容都要填')
+    const req = { title: t, prompt: p }
+    if (daily?.time) req.daily = { time: String(daily.time).slice(0, 5) + ':00', time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone }
+    else req.every_seconds = Math.max(60, Math.round(Number(everySeconds || 3600)))
+    const rec = await sch.create(sid, req, new AbortController().signal)
+    this.broadcast()
+    return { ok: true, id: rec?.id }
+  }
+
+  async deleteSchedule({ id, sessionId }) {
+    const sch = this.ctx.get?.('schedule')
+    const sid = sessionId || this.targetSession()
+    if (!sch?.delete || !sid) throw new Error('没有可删除的任务')
+    const r = await sch.delete({ sessionId: sid, id }, new AbortController().signal)
+    this.broadcast()
+    return { ok: true, deleted: !!r?.deleted }
+  }
+
   /* ── 给手机的状态快照 ───────────────────────────────────── */
 
   snapshot(deviceName) {
@@ -503,6 +717,9 @@ export class Bridge {
       pending: this.pendingList(),
       messages: msgs,
       settings: this.settings(target),
+      stats: this.statsOf(target),
+      cwd: this.currentCwd(target),
+      workspaces: this.workspaces(),
       vapid: this.pusher.publicKey,
       push: {
         enabled: !!this.store.config.pushEnabled,

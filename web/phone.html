@@ -23,6 +23,7 @@
     display:flex; flex-direction:column; overflow:hidden;
   }
   button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+  select{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:11px 13px;outline:none;width:100%}
   input,textarea{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:11px 13px;outline:none;width:100%}
   input:focus,textarea:focus{border-color:var(--accent)}
   [hidden]{display:none!important}
@@ -62,6 +63,21 @@
   .attach .a{display:flex;align-items:center;gap:6px;font-size:12px;background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:5px 8px;color:var(--muted);max-width:70vw}
   .attach .a span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .attach .a button{color:var(--dim);font-size:14px;line-height:1;padding:0 2px}
+
+  .stats{flex:0 0 auto;padding:7px 14px 0;font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+  .stats b{color:var(--muted);font-weight:600}
+  .pop{position:fixed;inset:0;background:rgba(4,8,16,.55);z-index:30;display:flex;align-items:flex-start;justify-content:center;padding:58px 12px;overflow:auto}
+  .pop-in{width:100%;max-width:440px;background:var(--bg2);border:1px solid var(--line);border-radius:16px;padding:14px 16px}
+  .pop-in h4{margin:0 0 10px;font-size:13px;color:var(--muted);font-weight:600}
+  .kv{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+  .kv:last-child{border-bottom:0}
+  .kv span{color:var(--dim)}
+  .kv b{font-weight:600}
+  .form{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+  .form input,.form textarea{font-size:14px}
+  .form .line{display:flex;gap:8px}
+  .form .line>*{flex:1}
+  .warnline{color:var(--warn);font-size:12px}
 
   .banner{
     margin:10px 14px 0;padding:10px 12px;border-radius:12px;background:var(--accent-soft);
@@ -130,11 +146,16 @@
     <button class="icon" id="moreBtn">⋯</button>
   </header>
   <div class="tools">
+    <button class="chip" id="chipCwd">工作区</button>
+    <button class="chip" id="chipNew">＋会话</button>
+    <button class="chip" id="chipSched">定时</button>
     <button class="chip" id="chipModel">模型</button>
     <button class="chip" id="chipPerm">权限</button>
     <button class="chip" id="chipPlan">Plan</button>
     <button class="chip" id="chipFile">＋文件</button>
   </div>
+  <div class="stats" id="statsBar">用量 —</div>
+  <div class="pop" id="statsPop" hidden><div class="pop-in" id="statsPopIn"></div></div>
   <div class="attach" id="attachRow"></div>
   <input type="file" id="fileInput" multiple hidden>
 
@@ -259,6 +280,7 @@ function render() {
   $('#status').textContent = target?.running ? '运行中…' : '空闲'
   setDot()
   renderTools(st.settings)
+  renderStats(st.stats, st.cwd)
   renderPush(st)
   renderPending(st)
   renderLog(st)
@@ -269,11 +291,41 @@ function permLabel(p) {
   return opt?.name || p.current
 }
 
+function shortPath(p) {
+  if (!p) return '—'
+  const parts = String(p).split(/[\\/]/).filter(Boolean)
+  return parts.length > 1 ? '…/' + parts.slice(-2).join('/') : String(p)
+}
+
+function fmtTok(n) {
+  const v = Number(n || 0)
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M'
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k'
+  return String(v)
+}
+
+function pct(x) {
+  return Number.isFinite(x) ? Math.round(x * 100) + '%' : '—'
+}
+
+function renderStats(st, cwd) {
+  const el = $('#statsBar')
+  if (!st) {
+    el.textContent = '用量 —'
+    return
+  }
+  el.innerHTML =
+    '<b>' + st.turns + '</b> 轮 · <b>' + st.steps + '</b> 步 · 入 ' + fmtTok(st.input) +
+    ' / 出 ' + fmtTok(st.output) + ' · 缓存 ' + pct(st.cacheHitRate) +
+    ' · 上下文 ' + pct(st.contextUsed)
+}
+
 function renderTools(st) {
   const m = st?.model
   $('#chipModel').textContent = m?.model ? '模型 · ' + m.model : '模型'
   const p = st?.permission
   $('#chipPerm').textContent = p?.current ? '权限 · ' + permLabel(p) : '权限'
+  $('#chipCwd').textContent = '工作区 · ' + shortPath(S.state?.cwd)
   const plan = st?.plan
   $('#chipPlan').textContent = plan?.active ? 'Plan 开' : 'Plan'
   $('#chipPlan').classList.toggle('on', !!plan?.active)
@@ -295,6 +347,10 @@ function renderAttach() {
   })
 }
 
+$('#chipCwd').onclick = () => openSheet('cwd')
+$('#chipNew').onclick = () => openSheet('new')
+$('#chipSched').onclick = () => openSheet('sched')
+$('#statsBar').onclick = () => openStats()
 $('#chipModel').onclick = () => openSheet('model')
 $('#chipPerm').onclick = () => openSheet('perm')
 $('#chipFile').onclick = () => $('#fileInput').click()
@@ -464,10 +520,148 @@ $('#sessBtn').onclick = () => openSheet('sessions')
 $('#moreBtn').onclick = () => openSheet('more')
 $('#sheet').onclick = (e) => { if (e.target.id === 'sheet') closeSheet() }
 
+async function openStats() {
+  $('#statsPop').hidden = false
+  const box = $('#statsPopIn')
+  box.innerHTML = '<h4>用量</h4><div class="kv"><span>读取中…</span><b></b></div>'
+  const r = await api('/api/stats?full=1')
+  if (!r.ok) {
+    box.innerHTML = '<h4>用量</h4><div class="kv"><span>' + esc(r.error || '取不到') + '</span></div>'
+    return
+  }
+  const s = r.stats || {}
+  const b = r.balance
+  const kv = (k, v) => '<div class="kv"><span>' + k + '</span><b>' + v + '</b></div>'
+  let html = '<h4>当前会话</h4>'
+  html += kv('轮数 / 步数', (s.turns || 0) + ' / ' + (s.steps || 0))
+  html += kv('输入 token', fmtTok(s.input))
+  html += kv('输出 token', fmtTok(s.output))
+  html += kv('缓存读 / 写', fmtTok(s.cacheRead) + ' / ' + fmtTok(s.cacheWrite))
+  html += kv('推理 token', fmtTok(s.reasoning))
+  html += kv('缓存命中率', pct(s.cacheHitRate))
+  html += kv('上下文', s.contextWindow ? fmtTok(s.lastInput) + ' / ' + fmtTok(s.contextWindow) + '（' + pct(s.contextUsed) + '）' : '—')
+  html += '<h4 style="margin-top:14px">账户</h4>'
+  if (!b || b.ok === false) html += kv('余额', esc((b && b.error) || '未登录'))
+  else {
+    const w = (b.wallets || []).map((x) => x.balance + ' ' + x.currency).join(' · ') || '—'
+    const bw = (b.bonusWallets || []).map((x) => x.balance + ' ' + x.currency).join(' · ')
+    html += kv('充值余额', esc(w))
+    if (bw) html += kv('赠送余额', esc(bw))
+  }
+  box.innerHTML = html
+}
+
+$('#statsPop').onclick = (e) => {
+  if (e.target.id === 'statsPop') $('#statsPop').hidden = true
+}
+
 async function openSheet(kind) {
   const st = S.state
   const box = $('#sheetIn')
   box.innerHTML = ''
+
+  if (kind === 'cwd') {
+    $('#sheet').hidden = false
+    box.innerHTML = '<h3>工作区 · 当前 ' + esc(shortPath(st?.cwd)) + '</h3>'
+    for (const w of st?.workspaces || []) {
+      const b = document.createElement('button')
+      b.className = 'item' + (w.path && w.path === st?.cwd ? ' on' : '')
+      b.innerHTML = '<span class="n">' + esc(w.title) + '<br><span class="b">' + esc(w.path) + '</span></span>'
+      b.onclick = async () => {
+        const r = await api('/api/cwd', { path: w.path })
+        if (!r.ok) return alert(r.error || '切换失败')
+        closeSheet()
+        schedule()
+      }
+      box.append(b)
+    }
+    const form = document.createElement('div')
+    form.className = 'form'
+    form.innerHTML = '<input id="cwdInput" placeholder="绝对路径，例如 /Users/xxx/project">' +
+      '<button class="btn" id="cwdSave">用这个目录</button>'
+    box.append(form)
+    form.querySelector('#cwdSave').onclick = async () => {
+      const path = form.querySelector('#cwdInput').value.trim()
+      if (!path) return
+      const r = await api('/api/cwd', { path })
+      if (!r.ok) return alert(r.error || '切换失败')
+      closeSheet()
+      schedule()
+    }
+    return
+  }
+
+  if (kind === 'new') {
+    $('#sheet').hidden = false
+    box.innerHTML = '<h3>新建会话</h3>'
+    const make = (label, sub, body) => {
+      const b = document.createElement('button')
+      b.className = 'item'
+      b.innerHTML = '<span class="n">' + esc(label) + (sub ? '<br><span class="b">' + esc(sub) + '</span>' : '') + '</span>'
+      b.onclick = async () => {
+        const r = await api('/api/session', body)
+        if (!r.ok) return alert(r.error || '创建失败')
+        closeSheet()
+        schedule()
+      }
+      box.append(b)
+    }
+    if (st?.cwd) make('在这个目录新建', st.cwd, { cwd: st.cwd })
+    for (const w of st?.workspaces || []) {
+      if (w.path === st?.cwd) continue
+      make(w.title, w.path, { cwd: w.path, workspaceId: w.id })
+    }
+    if (!(st?.workspaces || []).length && !st?.cwd) {
+      box.insertAdjacentHTML('beforeend', '<div class="item"><span class="n" style="color:var(--dim)">没有可用的工作区，先在上面设置一个</span></div>')
+    }
+    return
+  }
+
+  if (kind === 'sched') {
+    $('#sheet').hidden = false
+    box.innerHTML = '<h3>定时任务</h3><div id="schedList"></div>'
+    const r = await api('/api/schedules')
+    const listEl = box.querySelector('#schedList')
+    if (!r.ok) listEl.innerHTML = '<div class="hint">' + esc(r.error || '取不到') + '</div>'
+    else if (!(r.list || []).length) listEl.innerHTML = '<div class="hint">还没有定时任务</div>'
+    else {
+      for (const t of r.list) {
+        const row = document.createElement('div')
+        row.className = 'item'
+        row.innerHTML = '<span class="n">' + esc(t.title) + '<br><span class="b">' + esc(t.timing) + ' · ' +
+          esc(t.status) + (t.sessionId === st?.target ? ' · 本会话' : '') + '</span></span><button class="b">删</button>'
+        row.querySelector('button').onclick = async () => {
+          const d = await api('/api/schedule/delete', { id: t.id, sessionId: t.sessionId })
+          if (!d.ok) return alert(d.error || '删除失败')
+          openSheet('sched')
+        }
+        listEl.append(row)
+      }
+    }
+    const form = document.createElement('div')
+    form.className = 'form'
+    form.innerHTML =
+      '<input id="schTitle" placeholder="标题（必填）">' +
+      '<textarea id="schPrompt" rows="2" placeholder="到点后发给 agent 的内容"></textarea>' +
+      '<div class="line"><select id="schKind"><option value="daily">每天</option><option value="every">每隔 N 分钟</option></select>' +
+      '<input id="schVal" value="09:00" placeholder="09:00 或 30"></div>' +
+      '<button class="btn" id="schCreate">加一条</button>'
+    box.append(form)
+    form.querySelector('#schCreate').onclick = async () => {
+      const title = form.querySelector('#schTitle').value.trim()
+      const prompt = form.querySelector('#schPrompt').value.trim()
+      const kindSel = form.querySelector('#schKind').value
+      const val = form.querySelector('#schVal').value.trim()
+      if (!title || !prompt) return alert('标题和内容都要填')
+      const body = { title, prompt }
+      if (kindSel === 'daily') body.daily = { time: val }
+      else body.everySeconds = Math.round(Number(val) * 60)
+      const res = await api('/api/schedule', body)
+      if (!res.ok) return alert(res.error || '创建失败')
+      openSheet('sched')
+    }
+    return
+  }
 
   if (kind === 'model') {
     $('#sheet').hidden = false

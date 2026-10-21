@@ -325,6 +325,61 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
       }
     }
 
+    if (pathname === '/api/stats') {
+      const force = url.searchParams.get('full') === '1'
+      const stats = bridge.statsOf(bridge.targetSession())
+      const balance = await bridge.balance(force)
+      return json(res, 200, { ok: true, stats, balance })
+    }
+
+    if (pathname === '/api/workspaces') {
+      return json(res, 200, { ok: true, list: bridge.workspaces(), cwd: bridge.currentCwd() })
+    }
+
+    if (pathname === '/api/cwd' && req.method === 'POST') {
+      const body = await readBody(req)
+      try {
+        return json(res, 200, await bridge.setCwd(body))
+      } catch (e) {
+        return json(res, 200, { ok: false, error: String(e?.message || e) })
+      }
+    }
+
+    if (pathname === '/api/session' && req.method === 'POST') {
+      const body = await readBody(req)
+      try {
+        return json(res, 200, await bridge.newSession(body))
+      } catch (e) {
+        return json(res, 200, { ok: false, error: String(e?.message || e) })
+      }
+    }
+
+    if (pathname === '/api/schedules') {
+      try {
+        return json(res, 200, { ok: true, list: await bridge.schedules() })
+      } catch (e) {
+        return json(res, 200, { ok: false, error: String(e?.message || e), list: [] })
+      }
+    }
+
+    if (pathname === '/api/schedule' && req.method === 'POST') {
+      const body = await readBody(req)
+      try {
+        return json(res, 200, await bridge.createSchedule(body))
+      } catch (e) {
+        return json(res, 200, { ok: false, error: String(e?.message || e) })
+      }
+    }
+
+    if (pathname === '/api/schedule/delete' && req.method === 'POST') {
+      const body = await readBody(req)
+      try {
+        return json(res, 200, await bridge.deleteSchedule(body))
+      } catch (e) {
+        return json(res, 200, { ok: false, error: String(e?.message || e) })
+      }
+    }
+
     if (pathname === '/api/stop' && req.method === 'POST') {
       const body = await readBody(req)
       return json(res, 200, await bridge.stop(body.sessionId))

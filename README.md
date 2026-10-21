@@ -30,6 +30,12 @@
 | 权限 · xxx | 切沙箱 + 审批策略（read-only / workspace-write / danger-full-access …） | `permissionPresets.catalog()` / `current()` / `set()` |
 | Plan | 开/关 Plan 模式 | `planMode.get()` / `set()` |
 | ＋文件 | 选文件上传，发送时一起进 prompt | `fileUploads.uploadStream()` + `bindPrompt()` |
+| 工作区 · … | 切当前会话的工作目录 | `workspaceRegistry.list()` / `workingDirectory.set()` |
+| ＋会话 | 在工作区里新建会话 | `sessionController.create()` |
+| 定时 | 看 / 加 / 删定时任务 | `schedule.catalog()` / `create()` / `delete()` |
+
+顶栏一行不够就左右滑。下面那行「用量」收起时只显示轮/步/token 摘要，点开是浮层：输入输出、
+缓存命中率、上下文占用、账户余额；点浮层外面自动关。
 
 文件走 `POST /api/upload`（原始字节，25MB 上限），拿到 `receiptId` 后随 `/api/say` 一起提交。
 
@@ -68,6 +74,18 @@ Windows 上要注意的：
 - `tailscale.exe` 在 PATH 里时不用管路径；找不到就把完整路径塞进环境变量 `DSH_TAILSCALE_BIN`。
 - 只监听 127.0.0.1，Windows 防火墙不会弹窗。
 - 睡眠/休眠同样会断，`powercfg /change standby-timeout-ac 0` 可临时关掉。
+
+## 接口一览
+
+| 方法 | 路由 | 用途 |
+|---|---|---|
+| POST | `/api/cwd` | 设工作目录（`workingDirectory.set`） |
+| GET | `/api/workspaces` | 工作区列表 + 当前目录 |
+| POST | `/api/session` | 新建会话（可带 `cwd` / `workspaceId`） |
+| GET | `/api/schedules` | 定时任务列表 |
+| POST | `/api/schedule` | 新建（`daily:{time}` 或 `everySeconds`） |
+| POST | `/api/schedule/delete` | 删除 |
+| GET | `/api/stats?full=1` | 用量 + 余额（余额缓存 60s） |
 
 ## 配置（`~/.dsh/phone-bridge/config.json`）
 

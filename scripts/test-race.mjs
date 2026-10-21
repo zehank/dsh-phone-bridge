@@ -136,3 +136,41 @@ console.log('✓ 发消息不重复 / content 形状 通过')
 }
 
 console.log('✓ 注入上下文折进思考过程 通过')
+
+// 8) 历史会话列表 + 历史消息回放
+{
+  const ctx4 = {
+    get: (k) => {
+      if (k === 'sessionController')
+        return {
+          list: async () => ({
+            items: [
+              { sessionId: 'cold-1', cwd: '/Users/x/old-project', updatedAt: 100, running: false, projections: { values: { title: '旧会话' } } },
+              { sessionId: 'cold-2', cwd: '/Users/x/another', updatedAt: 50, running: false },
+            ],
+          }),
+          inspect: async () => ({
+            events: [
+              { type: 'user/message', seq: 1, time: 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '老问题' }] } },
+              { type: 'user/message', seq: 2, time: 2, data: { source: { kind: 'time-context' }, content: [{ type: 'text', text: 'TIME CTX' }] } },
+              { type: 'assistant/message', seq: 3, time: 3, data: { message: { content: [{ type: 'text', text: '老回答' }] } } },
+            ],
+          }),
+        }
+      return undefined
+    },
+    on: () => () => {},
+  }
+  const b4 = new Bridge(ctx4, store, pusher)
+  const list = await b4.sessionsWithHistory()
+  assert.equal(list.length, 2, '两个历史会话都要出现')
+  assert.equal(list.find((r) => r.id === 'cold-1').label, '旧会话', '标题要用 projection 里的 title')
+  assert.equal(list.find((r) => r.id === 'cold-2').label, 'another', '没有标题就退回目录名')
+
+  const msgs = await b4.messagesFor('cold-1')
+  assert.equal(msgs.length, 2, '只回放真用户消息和回答')
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'assistant'])
+  assert.ok(msgs[1].ctx.includes('TIME CTX'), '历史里的注入块也要折进 ctx')
+}
+
+console.log('✓ 历史会话与历史消息回放 通过')

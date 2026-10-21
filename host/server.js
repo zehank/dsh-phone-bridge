@@ -238,7 +238,17 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
 
     if (!device) return json(res, 401, { ok: false, error: '未配对' })
 
-    if (pathname === '/api/state') return json(res, 200, { ...bridge.snapshot(device.name), build: BUILD })
+    if (pathname === '/api/state') {
+      const snap = bridge.snapshot(device.name)
+      // 会话列表要连持久化的历史会话一起给；消息要能回放历史
+      try {
+        snap.sessions = await bridge.sessionsWithHistory()
+      } catch {}
+      try {
+        snap.messages = await bridge.messagesFor(snap.target)
+      } catch {}
+      return json(res, 200, { ...snap, build: BUILD })
+    }
 
     if (pathname === '/api/stream') {
       res.writeHead(200, {

@@ -83,6 +83,12 @@ Windows 上要注意的：
 - 只监听 127.0.0.1，Windows 防火墙不会弹窗。
 - 睡眠/休眠同样会断，`powercfg /change standby-timeout-ac 0` 可临时关掉。
 
+## 会话列表与历史
+
+点顶部会话标题能看到**所有会话**：正在跑的（`agents.list()`）+ 以前跑过的（`sessionController.list()`，
+没标题就退回工作目录名）。切到旧会话时会用 `sessionController.inspect()` 回放最近 120 条消息
+（注入块同样折进「思考过程」），历史缓存 30 秒。
+
 ## 接口一览
 
 | 方法 | 路由 | 用途 |

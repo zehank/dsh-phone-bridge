@@ -48,6 +48,9 @@ export class Bridge {
     this.liveCwd = new Map()
     this.ctxBuf = new Map()
     this.approvalLog = []
+    this.histCache = new Map()
+    this.listCache = null
+    this.listAt = 0
     this.balanceCache = null
     this.balanceAt = 0
   }
@@ -546,6 +549,8 @@ export class Bridge {
     this.running.delete(sid)
     this.startedAt.delete(sid)
     this.lastActivity.set(sid, Date.now())
+    this.histCache.delete(sid)
+    this.listCache = null
     this.broadcast()
     if (!this.store.config.pushTurnEnd || !started) return
     const elapsed = Date.now() - started
@@ -793,6 +798,87 @@ export class Bridge {
     const r = await sch.delete({ sessionId: sid, id }, new AbortController().signal)
     this.broadcast()
     return { ok: true, deleted: !!r?.deleted }
+  }
+
+  /* ── 会话列表 / 历史消息 ─────────────────────────────────── */
+
+  /** 活会话 + 持久化会话（以前跑过的），合并去重 */
+  async sessionsWithHistory() {
+    const live = this.liveSessions()
+    if (this.listCache && Date.now() - this.listAt < 10_000) return this.listCache
+    const byId = new Map(live.map((r) => [r.id, r]))
+    try {
+      const sc = this.ctx.get?.('sessionController')
+      const v = await sc?.list?.({}, new AbortController().signal)
+      for (const it of v?.items || []) {
+        if (byId.has(it.sessionId)) continue
+        const title = it?.projections?.values?.title
+        byId.set(it.sessionId, {
+          id: it.sessionId,
+          label:
+            (typeof title === 'string' && title) ||
+            (it.cwd ? labelOf(it.cwd) : '') ||
+            String(it.sessionId).replace(/^session-/, '').slice(0, 8),
+          cwd: it.cwd || '',
+          running: !!it.running,
+          lastActivity: it.updatedAt || 0,
+          cold: true,
+        })
+      }
+    } catch {}
+    const rows = [...byId.values()].sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0))
+    this.listCache = rows
+    this.listAt = Date.now()
+    return rows
+  }
+
+  /** 从会话日志里回放历史消息（注入块同样折进 ctx） */
+  async history(sid) {
+    if (!sid) return []
+    const c = this.histCache.get(sid)
+    if (c && Date.now() - c.at < 30_000) return c.rows
+    let rows = []
+    try {
+      const sc = this.ctx.get?.('sessionController')
+      const ins = await sc.inspect(sid, new AbortController().signal)
+      const evs = ins?.events || []
+      const buf = []
+      const take = () => {
+        const t = buf.join('\n\n').trim()
+        buf.length = 0
+        return t.length > 12000 ? t.slice(0, 12000) + '…（已截断）' : t
+      }
+      for (const ev of evs) {
+        if (ev?.type === 'user/message') {
+          const src = ev.data?.source?.kind || 'user'
+          const text = textOf(ev.data)
+          if (!text) continue
+          if (src === 'user') rows.push({ role: 'user', text, time: ev.time, seq: ev.seq })
+          else buf.push(text)
+        } else if (ev?.type === 'assistant/message') {
+          const text = textOf(ev.data?.message)
+          if (!text) continue
+          const ctx = take()
+          rows.push({ role: 'assistant', text, time: ev.time, seq: ev.seq, ...(ctx ? { ctx } : {}) })
+        }
+      }
+      rows = rows.slice(-120)
+    } catch {}
+    this.histCache.set(sid, { at: Date.now(), rows })
+    return rows
+  }
+
+  /** 历史 + 内存里的最新，按 seq 合并 */
+  async messagesFor(sid, limit = 40) {
+    if (!sid) return []
+    const ring = this.recent.get(sid) || []
+    const base = await this.history(sid)
+    const bySeq = new Map()
+    for (const m of base) if (typeof m.seq === 'number' && m.seq >= 0) bySeq.set(m.seq, m)
+    for (const m of ring) if (typeof m.seq === 'number' && m.seq >= 0) bySeq.set(m.seq, m)
+    const merged = [...bySeq.values()].sort((a, b) => a.seq - b.seq)
+    const pending = ring.filter((m) => m.pending)
+    return [...merged, ...pending].slice(-limit)
   }
 
   /* ── 给手机的状态快照 ───────────────────────────────────── */

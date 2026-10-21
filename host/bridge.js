@@ -46,6 +46,7 @@ export class Bridge {
     this.lastActivity = new Map()
     this.stats = new Map()
     this.liveCwd = new Map()
+    this.ctxBuf = new Map()
     this.balanceCache = null
     this.balanceAt = 0
   }
@@ -471,9 +472,22 @@ export class Bridge {
     if (cwd) this.labels.set(sid, labelOf(cwd))
     if (event.type === 'assistant/message') {
       const text = textOf(event.data?.message)
-      if (text) this.pushRecent(sid, { role: 'assistant', text, time: event.time || Date.now(), seq: event.seq })
+      if (text) {
+        const ctx = this.takeContext(sid)
+        this.pushRecent(sid, { role: 'assistant', text, time: event.time || Date.now(), seq: event.seq, ...(ctx ? { ctx } : {}) })
+      }
     } else if (event.type === 'user/message') {
+      const src = event.data?.source?.kind || 'user'
       const text = textOf(event.data)
+      if (src !== 'user') {
+        // DSH 每轮会往会话里塞 time-context / runtime-context / dsh-mnemon 等注入块，
+        // 它们也是 user/message，但不是他打的字 —— 收进「思考过程」里，不进消息流
+        if (text) {
+          this.noteContext(sid, text)
+          this.broadcast()
+        }
+        return
+      }
       if (text) {
         // 手机发出去时插了一条占位（pending），真实事件到了就把它摘掉，否则显示两条
         const rows = this.recent.get(sid) || []
@@ -536,6 +550,22 @@ export class Bridge {
         data: { kind: 'error' },
       })
       .catch(() => {})
+  }
+
+  noteContext(sid, text) {
+    const rows = this.ctxBuf.get(sid) || []
+    rows.push(String(text))
+    let total = rows.join('\n\n').length
+    while (total > 20000 && rows.length > 1) total -= rows.shift().length + 2
+    this.ctxBuf.set(sid, rows)
+  }
+
+  takeContext(sid) {
+    const rows = this.ctxBuf.get(sid) || []
+    this.ctxBuf.delete(sid)
+    const text = rows.join('\n\n').trim()
+    if (!text) return ''
+    return text.length > 12000 ? text.slice(0, 12000) + '…（已截断）' : text
   }
 
   pushRecent(sid, msg) {

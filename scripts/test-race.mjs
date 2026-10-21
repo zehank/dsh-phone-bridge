@@ -108,3 +108,31 @@ console.log('✓ 竞速 / 失效 / 提问 全部通过')
 }
 
 console.log('✓ 发消息不重复 / content 形状 通过')
+
+// 7) DSH 每轮注入的上下文（source.kind != 'user'）不能当成他发的消息
+{
+  const ctx3 = { get: (k) => (k === 'agents' ? { get: () => ({ id: 's3' }) } : undefined), on: () => () => {} }
+  const b3 = new Bridge(ctx3, store, pusher)
+  const push = (data, seq, type = 'user/message') =>
+    b3.onSessionEvent({ id: 's3' }, { type, seq, time: Date.now(), data })
+
+  push({ source: { kind: 'time-context' }, content: [{ type: 'text', text: 'TIME CTX' }] }, 1)
+  push({ source: { kind: 'runtime-context' }, content: [{ type: 'text', text: 'RUNTIME CTX' }] }, 2)
+  push({ source: { kind: 'user' }, content: [{ type: 'text', text: '你好' }] }, 3)
+
+  let rows = b3.recent.get('s3') || []
+  assert.equal(rows.length, 1, '注入块不该进消息流')
+  assert.equal(rows[0].text, '你好')
+
+  push({ message: { content: [{ type: 'text', text: '回答' }] } }, 4, 'assistant/message')
+  rows = b3.recent.get('s3')
+  const last = rows[rows.length - 1]
+  assert.equal(last.role, 'assistant')
+  assert.equal(last.text, '回答')
+  assert.ok(last.ctx && last.ctx.includes('TIME CTX') && last.ctx.includes('RUNTIME CTX'), '注入块应挂到这条回答上')
+
+  push({ message: { content: [{ type: 'text', text: '回答2' }] } }, 5, 'assistant/message')
+  assert.equal((b3.recent.get('s3').at(-1).ctx), undefined, '下一轮没有注入就不该有 ctx')
+}
+
+console.log('✓ 注入上下文折进思考过程 通过')

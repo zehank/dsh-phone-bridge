@@ -34,7 +34,11 @@
 | ＋会话 | 在工作区里新建会话 | `sessionController.create()` |
 | 定时 | 看 / 加 / 删定时任务 | `schedule.catalog()` / `create()` / `delete()` |
 
-顶栏一行不够就左右滑。超过 420 字的回复默认折成 8 行多，点「展开」看全文、「收起」再折回去。下面那行「用量」收起时只显示轮/步/token 摘要，点开是浮层：输入输出、
+顶栏一行不够就左右滑。
+
+消息流只显示你说的话和我的回答。DSH 每轮注入的 `time-context` / `runtime-context` / `dsh-mnemon`
+（`user/message` 里 `source.kind !== 'user'` 的那些）不会当消息出现，而是折进回答上方的
+「思考过程」按钮，点开才看得到。下面那行「用量」收起时只显示轮/步/token 摘要，点开是浮层：输入输出、
 缓存命中率、上下文占用、账户余额；点浮层外面自动关。
 
 文件走 `POST /api/upload`（原始字节，25MB 上限），拿到 `receiptId` 后随 `/api/say` 一起提交。

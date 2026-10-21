@@ -232,8 +232,17 @@ export class Bridge {
         const cat = pp.catalog()
         out.permission = { current: pp.current(session), options: cat?.options || [] }
       }
-      const pm = this.ctx.get?.('planMode')
-      if (pm && agent) out.plan = pm.get(agent)
+      const ap = this.ctx.get?.('agentPresets')
+      if (ap) {
+        // 当前「模式」= 会话日志里记的 preset；还没开始过回合就读活 agent 的 composition
+        let current = session?.header?.agentPreset || null
+        if (!current && agent) {
+          try {
+            current = ap.composedPreset?.(agent.ctx) || null
+          } catch {}
+        }
+        out.mode = { current }
+      }
     } catch (e) {
       out.error = String(e?.message || e)
     }
@@ -279,13 +288,43 @@ export class Bridge {
     return { ok: true }
   }
 
-  setPlan({ active, sessionId }) {
-    const pm = this.ctx.get?.('planMode')
-    const agent = this.agentOf(sessionId || this.targetSession())
-    if (!pm?.set || !agent) throw new Error('Plan 模式不可用')
-    const result = pm.set(agent, Boolean(active))
+  /** 模式 = agent preset（标准 / 创造 …） */
+  async presets() {
+    const ap = this.ctx.get?.('agentPresets')
+    if (!ap?.remoteExportList) throw new Error('agentPresets 不可用')
+    const roster = await ap.remoteExportList()
+    const sid = this.targetSession()
+    const session = this.sessionOf(sid)
+    const agent = this.agentOf(sid)
+    let current = session?.header?.agentPreset || null
+    if (!current && agent) {
+      try {
+        current = ap.composedPreset?.(agent.ctx) || null
+      } catch {}
+    }
+    return {
+      ok: true,
+      current,
+      presets: (roster?.presets || []).map((p) => ({
+        id: p.id,
+        name: p.name || p.id,
+        description: p.description || '',
+        isDefault: !!p.isDefault,
+        broken: p.broken || null,
+      })),
+    }
+  }
+
+  async selectPreset({ id, sessionId }) {
+    const ap = this.ctx.get?.('agentPresets')
+    const sid = sessionId || this.targetSession()
+    const agent = this.agentOf(sid)
+    if (!ap?.select) throw new Error('agentPresets 不可用')
+    if (!agent) throw new Error('这个会话还没激活：先发一条消息，再切模式')
+    if (!id) throw new Error('缺 preset id')
+    const committed = await ap.select(agent, String(id))
     this.broadcast()
-    return { ok: true, result }
+    return { ok: true, preset: committed || String(id) }
   }
 
   async stop(sessionId) {

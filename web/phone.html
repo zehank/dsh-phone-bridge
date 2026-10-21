@@ -151,7 +151,7 @@
     <button class="chip" id="chipSched">定时</button>
     <button class="chip" id="chipModel">模型</button>
     <button class="chip" id="chipPerm">权限</button>
-    <button class="chip" id="chipPlan">Plan</button>
+    <button class="chip" id="chipMode">模式</button>
     <button class="chip" id="chipFile">＋文件</button>
   </div>
   <div class="stats" id="statsBar">用量 —</div>
@@ -181,7 +181,7 @@
 
 <script>
 const $ = (s) => document.querySelector(s)
-const S = { token: localStorage.getItem('pb.token') || '', state: null, es: null, timer: null, sheet: null, files: [] }
+const S = { token: localStorage.getItem('pb.token') || '', state: null, es: null, timer: null, sheet: null, files: [], presetNames: {} }
 
 const api = async (p, body) => {
   const opt = { headers: { 'content-type': 'application/json', authorization: 'Bearer ' + S.token } }
@@ -226,6 +226,7 @@ async function start() {
   $('#gate').hidden = true
   $('#app').hidden = false
   await refresh()
+  loadPresets()
   connect()
   registerSW()
   reportDiag({ stage: 'boot' })
@@ -326,9 +327,8 @@ function renderTools(st) {
   const p = st?.permission
   $('#chipPerm').textContent = p?.current ? '权限 · ' + permLabel(p) : '权限'
   $('#chipCwd').textContent = '工作区 · ' + shortPath(S.state?.cwd)
-  const plan = st?.plan
-  $('#chipPlan').textContent = plan?.active ? 'Plan 开' : 'Plan'
-  $('#chipPlan').classList.toggle('on', !!plan?.active)
+  const cur = st?.mode?.current
+  $('#chipMode').textContent = '模式 · ' + (S.presetNames[cur] || cur || '默认')
   renderAttach()
 }
 
@@ -354,12 +354,7 @@ $('#statsBar').onclick = () => openStats()
 $('#chipModel').onclick = () => openSheet('model')
 $('#chipPerm').onclick = () => openSheet('perm')
 $('#chipFile').onclick = () => $('#fileInput').click()
-$('#chipPlan').onclick = async () => {
-  const active = !S.state?.settings?.plan?.active
-  const r = await api('/api/plan', { active })
-  if (!r.ok) alert(r.error || '切换失败')
-  schedule()
-}
+$('#chipMode').onclick = () => openSheet('mode')
 
 $('#fileInput').onchange = async (e) => {
   const picked = [...(e.target.files || [])]
@@ -520,6 +515,14 @@ $('#sessBtn').onclick = () => openSheet('sessions')
 $('#moreBtn').onclick = () => openSheet('more')
 $('#sheet').onclick = (e) => { if (e.target.id === 'sheet') closeSheet() }
 
+async function loadPresets() {
+  try {
+    const r = await api('/api/presets')
+    if (r.ok) for (const p of r.presets || []) S.presetNames[p.id] = p.name
+    renderTools(S.state?.settings)
+  } catch {}
+}
+
 async function openStats() {
   $('#statsPop').hidden = false
   const box = $('#statsPopIn')
@@ -614,6 +617,38 @@ async function openSheet(kind) {
     if (!(st?.workspaces || []).length && !st?.cwd) {
       box.insertAdjacentHTML('beforeend', '<div class="item"><span class="n" style="color:var(--dim)">没有可用的工作区，先在上面设置一个</span></div>')
     }
+    return
+  }
+
+  if (kind === 'mode') {
+    $('#sheet').hidden = false
+    box.innerHTML = '<h3>模式（agent preset）</h3>'
+    const r = await api('/api/presets')
+    if (!r.ok) {
+      box.insertAdjacentHTML('beforeend', '<div class="item"><span class="n" style="color:var(--dim)">' + esc(r.error || '取不到') + '</span></div>')
+      return
+    }
+    for (const p of r.presets || []) {
+      S.presetNames[p.id] = p.name
+      const on = r.current ? r.current === p.id : p.isDefault
+      const b = document.createElement('button')
+      b.className = 'item' + (on ? ' on' : '')
+      b.innerHTML = '<span class="n">' + esc(p.name) +
+        (p.description ? '<br><span class="b">' + esc(p.description) + '</span>' : '') +
+        (p.broken ? '<br><span class="warnline">这个 preset 加载失败</span>' : '') + '</span>' +
+        (on ? '<span class="b">当前</span>' : '')
+      b.onclick = async () => {
+        const res = await api('/api/preset', { id: p.id })
+        if (!res.ok) return alert(res.error || '切换失败')
+        if (res.preset && res.preset !== p.id) {
+          alert('这个会话已经定型了，模式没变。用「＋会话」新建一个再选。')
+        }
+        closeSheet()
+        schedule()
+      }
+      box.append(b)
+    }
+    if (!(r.presets || []).length) box.insertAdjacentHTML('beforeend', '<div class="item"><span class="n" style="color:var(--dim)">没有可选模式</span></div>')
     return
   }
 

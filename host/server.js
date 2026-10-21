@@ -316,10 +316,18 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
       }
     }
 
-    if (pathname === '/api/plan' && req.method === 'POST') {
+    if (pathname === '/api/presets') {
+      try {
+        return json(res, 200, await bridge.presets())
+      } catch (e) {
+        return json(res, 200, { ok: false, error: String(e?.message || e), presets: [] })
+      }
+    }
+
+    if (pathname === '/api/preset' && req.method === 'POST') {
       const body = await readBody(req)
       try {
-        return json(res, 200, bridge.setPlan(body))
+        return json(res, 200, await bridge.selectPreset(body))
       } catch (e) {
         return json(res, 200, { ok: false, error: String(e?.message || e) })
       }

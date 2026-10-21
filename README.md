@@ -26,9 +26,9 @@
 
 | 顶栏 | 作用 | 走的宿主接口 |
 |---|---|---|
+| 模式 · xxx | 切 agent preset（standard / ptc / minimal / cordis …） | `agentPresets.remoteExportList()` / `select()` |
 | 模型 · xxx | 切当前会话的模型 | `sessionController.modelCatalog()` / `selectModel()` |
 | 权限 · xxx | 切沙箱 + 审批策略（read-only / workspace-write / danger-full-access …） | `permissionPresets.catalog()` / `current()` / `set()` |
-| Plan | 开/关 Plan 模式 | `planMode.get()` / `set()` |
 | ＋文件 | 选文件上传，发送时一起进 prompt | `fileUploads.uploadStream()` + `bindPrompt()` |
 | 工作区 · … | 切当前会话的工作目录 | `workspaceRegistry.list()` / `workingDirectory.set()` |
 | ＋会话 | 在工作区里新建会话 | `sessionController.create()` |

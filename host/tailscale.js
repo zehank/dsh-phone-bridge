@@ -11,11 +11,45 @@
  * 权威地址永远以 config.json 的 publicUrl 为准，CLI 只是锦上添花。
  */
 import { execFile } from 'node:child_process'
+import fs from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
 
-const BIN = process.env.DSH_TAILSCALE_BIN || '/Applications/Tailscale.app/Contents/MacOS/Tailscale'
+/**
+ * 各平台的 Tailscale CLI 位置：
+ *   macOS    /Applications/Tailscale.app/Contents/MacOS/Tailscale（就是 GUI 那个二进制）
+ *   Windows  C:\Program Files\Tailscale\tailscale.exe
+ *   Linux    PATH 里的 tailscale
+ * 可用 DSH_TAILSCALE_BIN 覆盖。
+ */
+function findBin() {
+  if (process.env.DSH_TAILSCALE_BIN) return process.env.DSH_TAILSCALE_BIN
+  const candidates = []
+  if (process.platform === 'darwin') {
+    candidates.push('/Applications/Tailscale.app/Contents/MacOS/Tailscale')
+  } else if (process.platform === 'win32') {
+    for (const base of [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], 'C:\\Program Files']) {
+      if (base) candidates.push(path.join(base, 'Tailscale', 'tailscale.exe'))
+    }
+    if (process.env.LOCALAPPDATA) candidates.push(path.join(process.env.LOCALAPPDATA, 'Tailscale', 'tailscale.exe'))
+  } else {
+    candidates.push('/usr/bin/tailscale', '/usr/local/bin/tailscale')
+  }
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p
+    } catch {}
+  }
+  return process.platform === 'win32' ? 'tailscale.exe' : 'tailscale'
+}
+
+const BIN = findBin()
 
 function childEnv() {
+  // Windows：原样继承（CLI 不依赖 TERM/SHLVL 这种“终端感”变量）。
+  if (process.platform === 'win32') return { ...process.env }
+  // macOS/Linux：App 宿主环境太空，CLI 会去找 GUI 并报
+  // "The Tailscale GUI failed to start"，所以补一份最小环境。
   const home = process.env.HOME || os.homedir()
   const user = process.env.USER || os.userInfo().username
   return {

@@ -1,5 +1,5 @@
 {
-  "name": "手机桥 · DeepSeek Harness",
+  "name": "手机桥 · __HOST__",
   "short_name": "手机桥",
   "description": "在手机上给 DeepSeek Harness 下命令、批准操作、收消息推送。",
   "start_url": "/",

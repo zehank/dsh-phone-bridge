@@ -30,6 +30,34 @@
 4. 页面里点「开启」通知权限 → 浏览器菜单「添加到主屏幕」。
 5. 回电脑页面点「发一条测试推送」，手机应该立刻弹一条。
 
+## Windows
+
+同一套代码，CLI 位置和环境修正按平台走：
+
+| | macOS | Windows |
+|---|---|---|
+| Tailscale CLI | `/Applications/Tailscale.app/Contents/MacOS/Tailscale` | `C:\Program Files\Tailscale\tailscale.exe` |
+| 服务地址 | `http://127.0.0.1:8791` | `http://127.0.0.1:8791` |
+| 手机地址 | `https://<机器名>.<tailnet>.ts.net/` | 同左（机器名换成这台 PC） |
+
+在 Windows 上装：
+
+```powershell
+git clone https://github.com/zehank/dsh-phone-bridge "$HOME\dsh-phone-bridge"
+cd "$HOME\dsh-phone-bridge"
+npm install                      # 或者 pnpm install
+dsh plugin --profile desktop add "$HOME\dsh-phone-bridge"
+tailscale serve --bg 8791        # 只要这台 PC 还没开过；tailnet 已开过 HTTPS 就不用再授权
+```
+
+装完**重启一次 DeepSeek Harness**，再打开 <http://127.0.0.1:8791/> 走同样的配对流程。
+两台电脑各自配对一次，手机上会出现两个图标（名字是 `手机桥 · <机器名>`，例如 `手机桥 · rzhank`），互不干扰。
+
+Windows 上要注意的：
+- `tailscale.exe` 在 PATH 里时不用管路径；找不到就把完整路径塞进环境变量 `DSH_TAILSCALE_BIN`。
+- 只监听 127.0.0.1，Windows 防火墙不会弹窗。
+- 睡眠/休眠同样会断，`powercfg /change standby-timeout-ac 0` 可临时关掉。
+
 ## 配置（`~/.dsh/phone-bridge/config.json`）
 
 | 键 | 默认 | 说明 |

@@ -13,6 +13,7 @@
  */
 import fs from 'node:fs'
 import http from 'node:http'
+import os from 'node:os'
 import path from 'node:path'
 import QRCode from 'qrcode'
 import { tailscaleInfo, enableServe } from './tailscale.js'
@@ -27,6 +28,9 @@ const MIME = {
 }
 
 const LOCAL = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+
+/** 装到主屏后两台电脑的图标靠这个名字区分 */
+export const HOST_NAME = String(os.hostname() || 'dsh').replace(/\.local$/i, '')
 
 /**
  * 本机请求才给管理页。注意 Tailscale Serve 会把手机的请求也从 127.0.0.1 转进来，
@@ -155,7 +159,7 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
 
   function phonePage() {
     try {
-      return fs.readFileSync(path.join(webRoot, 'phone.html'), 'utf8')
+      return fs.readFileSync(path.join(webRoot, 'phone.html'), 'utf8').replaceAll('__HOST__', HOST_NAME)
     } catch {
       return '<!doctype html><meta charset="utf-8"><p>phone.html 丢了</p>'
     }
@@ -317,6 +321,19 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
           'cache-control': 'no-store',
         })
         return res.end(html)
+      }
+
+      if (pathname === '/manifest.webmanifest') {
+        try {
+          const raw = fs.readFileSync(path.join(webRoot, 'manifest.webmanifest'), 'utf8')
+          const body = raw.replaceAll('__HOST__', HOST_NAME)
+          res.writeHead(200, {
+            'content-type': MIME['.webmanifest'],
+            'cache-control': 'no-store',
+            'content-length': Buffer.byteLength(body),
+          })
+          return res.end(body)
+        } catch {}
       }
 
       const file = pathname.replace(/^\/+/, '')

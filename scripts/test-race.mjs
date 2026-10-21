@@ -174,3 +174,15 @@ console.log('✓ 注入上下文折进思考过程 通过')
 }
 
 console.log('✓ 历史会话与历史消息回放 通过')
+
+// 9) 选中的历史会话不能被活会话顶掉
+{
+  const savedStore = { ...store, target: () => 'cold-1', setTarget() {} }
+  const liveCtx = {
+    get: (k) => (k === 'agents' ? { list: () => [{ id: 'live-1', session: { header: { cwd: '/x/live' } } }] } : undefined),
+    on: () => () => {},
+  }
+  const b5 = new Bridge(liveCtx, savedStore, pusher)
+  assert.equal(b5.targetSession(), 'cold-1', '点了历史会话就必须留在它上面')
+}
+console.log('✓ 历史会话可切换 通过')

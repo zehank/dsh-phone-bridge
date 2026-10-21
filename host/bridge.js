@@ -140,10 +140,11 @@ export class Bridge {
   }
 
   targetSession() {
-    const rows = this.liveSessions()
+    // 他手动选过的会话（含历史/冷会话）必须留住：
+    // 旧版要求 saved 必须出现在 liveSessions 里，于是选了旧会话又被顶回活会话，点了像没反应。
     const saved = this.store.target()
-    if (saved && rows.some((r) => r.id === saved)) return saved
-    return rows[0]?.id || saved || null
+    if (saved) return saved
+    return this.liveSessions()[0]?.id || null
   }
 
   setTarget(sid) {
@@ -715,12 +716,14 @@ export class Bridge {
 
   currentCwd(sid) {
     const id = sid || this.targetSession()
+    if (!id) return ''
     try {
-      const session = this.sessionOf(id)
-      return session?.header?.cwd || this.liveSessions().find((r) => r.id === id)?.cwd || ''
-    } catch {
-      return ''
-    }
+      const cwd = this.sessionOf(id)?.header?.cwd
+      if (cwd) return cwd
+    } catch {}
+    // 历史会话没有活的 Session 对象，就从合并后的列表里拿（listCache 由 sessionsWithHistory 填充）
+    const row = (this.listCache || []).find((r) => r.id === id) || this.liveSessions().find((r) => r.id === id)
+    return row?.cwd || ''
   }
 
   async setCwd({ path: dir, sessionId }) {

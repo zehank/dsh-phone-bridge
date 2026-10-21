@@ -781,7 +781,8 @@ async function openSheet(kind) {
     for (const s of st.sessions) {
       const b = document.createElement('button')
       b.className = 'item' + (s.id === st.target ? ' on' : '')
-      b.innerHTML = `<span class="n">${esc(s.label)}</span><span class="b">${s.running ? '运行中' : ''}</span>`
+      b.innerHTML = '<span class="n">' + esc(s.label) + '</span><span class="b">' +
+        (s.running ? '运行中' : s.cold ? '历史' : '') + '</span>'
       b.onclick = async () => { await api('/api/target', { sessionId: s.id }); closeSheet(); schedule() }
       box.append(b)
     }

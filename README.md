@@ -22,6 +22,17 @@
 
 审批用「竞速」而不是拦截：先让桌面照常弹框，再和手机赛跑。否则在电脑前反而只能掏手机。
 
+## 手机端能做什么
+
+| 顶栏 | 作用 | 走的宿主接口 |
+|---|---|---|
+| 模型 · xxx | 切当前会话的模型 | `sessionController.modelCatalog()` / `selectModel()` |
+| 权限 · xxx | 切沙箱 + 审批策略（read-only / workspace-write / danger-full-access …） | `permissionPresets.catalog()` / `current()` / `set()` |
+| Plan | 开/关 Plan 模式 | `planMode.get()` / `set()` |
+| ＋文件 | 选文件上传，发送时一起进 prompt | `fileUploads.uploadStream()` + `bindPrompt()` |
+
+文件走 `POST /api/upload`（原始字节，25MB 上限），拿到 `receiptId` 后随 `/api/say` 一起提交。
+
 ## 首次接通
 
 1. 电脑上打开 <http://127.0.0.1:8791/>（这个页面只有本机能开）。

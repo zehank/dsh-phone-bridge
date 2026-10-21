@@ -53,6 +53,16 @@
   .icon{width:34px;height:34px;border-radius:10px;color:var(--muted);font-size:19px;line-height:34px;text-align:center}
   .icon:active{background:var(--card2)}
 
+  .tools{display:flex;gap:8px;padding:9px 14px 0;overflow-x:auto;flex:0 0 auto;scrollbar-width:none}
+  .tools::-webkit-scrollbar{display:none}
+  .chip{flex:0 0 auto;font-size:12.5px;padding:6px 11px;border-radius:999px;background:var(--card2);color:var(--muted);border:1px solid var(--line);white-space:nowrap;max-width:52vw;overflow:hidden;text-overflow:ellipsis}
+  .chip.on{background:var(--accent-soft);border-color:#2a4c86;color:var(--text)}
+  .attach{display:flex;gap:8px;flex-wrap:wrap;padding:0 14px}
+  .attach:not(:empty){margin-top:8px}
+  .attach .a{display:flex;align-items:center;gap:6px;font-size:12px;background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:5px 8px;color:var(--muted);max-width:70vw}
+  .attach .a span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .attach .a button{color:var(--dim);font-size:14px;line-height:1;padding:0 2px}
+
   .banner{
     margin:10px 14px 0;padding:10px 12px;border-radius:12px;background:var(--accent-soft);
     border:1px solid #2a4c86;font-size:13px;display:flex;gap:10px;align-items:center;flex:0 0 auto;
@@ -119,6 +129,15 @@
     <button class="sess" id="sessBtn">连接中…</button>
     <button class="icon" id="moreBtn">⋯</button>
   </header>
+  <div class="tools">
+    <button class="chip" id="chipModel">模型</button>
+    <button class="chip" id="chipPerm">权限</button>
+    <button class="chip" id="chipPlan">Plan</button>
+    <button class="chip" id="chipFile">＋文件</button>
+  </div>
+  <div class="attach" id="attachRow"></div>
+  <input type="file" id="fileInput" multiple hidden>
+
   <div class="banner" id="pushBanner" hidden>
     <span id="pushBannerText">开通知才能锁屏收到消息</span>
     <button id="pushBtn">开启</button>
@@ -141,7 +160,7 @@
 
 <script>
 const $ = (s) => document.querySelector(s)
-const S = { token: localStorage.getItem('pb.token') || '', state: null, es: null, timer: null, sheet: null }
+const S = { token: localStorage.getItem('pb.token') || '', state: null, es: null, timer: null, sheet: null, files: [] }
 
 const api = async (p, body) => {
   const opt = { headers: { 'content-type': 'application/json', authorization: 'Bearer ' + S.token } }
@@ -239,9 +258,72 @@ function render() {
   $('#stopBtn').hidden = !target?.running
   $('#status').textContent = target?.running ? '运行中…' : '空闲'
   setDot()
+  renderTools(st.settings)
   renderPush(st)
   renderPending(st)
   renderLog(st)
+}
+
+function permLabel(p) {
+  const opt = (p.options || []).find((o) => o.value === p.current)
+  return opt?.name || p.current
+}
+
+function renderTools(st) {
+  const m = st?.model
+  $('#chipModel').textContent = m?.model ? '模型 · ' + m.model : '模型'
+  const p = st?.permission
+  $('#chipPerm').textContent = p?.current ? '权限 · ' + permLabel(p) : '权限'
+  const plan = st?.plan
+  $('#chipPlan').textContent = plan?.active ? 'Plan 开' : 'Plan'
+  $('#chipPlan').classList.toggle('on', !!plan?.active)
+  renderAttach()
+}
+
+function renderAttach() {
+  const row = $('#attachRow')
+  row.innerHTML = ''
+  S.files.forEach((f, i) => {
+    const el = document.createElement('div')
+    el.className = 'a'
+    el.innerHTML = '<span>' + esc(f.name) + '</span><button>×</button>'
+    el.querySelector('button').onclick = () => {
+      S.files.splice(i, 1)
+      renderAttach()
+    }
+    row.append(el)
+  })
+}
+
+$('#chipModel').onclick = () => openSheet('model')
+$('#chipPerm').onclick = () => openSheet('perm')
+$('#chipFile').onclick = () => $('#fileInput').click()
+$('#chipPlan').onclick = async () => {
+  const active = !S.state?.settings?.plan?.active
+  const r = await api('/api/plan', { active })
+  if (!r.ok) alert(r.error || '切换失败')
+  schedule()
+}
+
+$('#fileInput').onchange = async (e) => {
+  const picked = [...(e.target.files || [])]
+  e.target.value = ''
+  for (const f of picked) {
+    if (f.size > 25 << 20) {
+      alert(f.name + ' 太大（25MB 上限）')
+      continue
+    }
+    const r = await fetch('/api/upload?name=' + encodeURIComponent(f.name), {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + S.token, 'content-type': 'application/octet-stream' },
+      body: f,
+    })
+      .then((x) => x.json())
+      .catch((err) => ({ ok: false, error: String(err) }))
+    if (r.ok) S.files.push({ receiptId: r.receiptId, file: r.file, name: f.name })
+    else alert('上传失败：' + (r.error || '未知'))
+  }
+  renderAttach()
 }
 
 function renderPush(st) {
@@ -350,14 +432,18 @@ function esc(s) {
 async function send() {
   const el = $('#input')
   const text = el.value.trim()
-  if (!text) return
+  if (!text && !S.files.length) return
+  const files = S.files.map((f) => ({ receiptId: f.receiptId, file: f.file }))
   el.value = ''
   el.style.height = 'auto'
   autoGrow(el)
-  const r = await api('/api/say', { text })
+  const r = await api('/api/say', { text, files })
   if (!r.ok) {
     el.value = text
     $('#status').textContent = r.error || '发送失败'
+  } else {
+    S.files = []
+    renderAttach()
   }
   schedule()
 }
@@ -378,10 +464,64 @@ $('#sessBtn').onclick = () => openSheet('sessions')
 $('#moreBtn').onclick = () => openSheet('more')
 $('#sheet').onclick = (e) => { if (e.target.id === 'sheet') closeSheet() }
 
-function openSheet(kind) {
+async function openSheet(kind) {
   const st = S.state
   const box = $('#sheetIn')
   box.innerHTML = ''
+
+  if (kind === 'model') {
+    $('#sheet').hidden = false
+    box.innerHTML = '<h3>模型</h3>'
+    const r = await api('/api/models')
+    if (!r.ok) {
+      box.insertAdjacentHTML('beforeend', '<div class="item"><span class="n" style="color:var(--dim)">' + esc(r.error) + '</span></div>')
+      return
+    }
+    for (const g of r.groups || []) {
+      box.insertAdjacentHTML('beforeend', '<h3 style="margin-top:12px">' + esc(g.name) + '</h3>')
+      for (const m of g.models || []) {
+        const on = r.current && r.current.provider === g.id && r.current.model === m.id
+        const b = document.createElement('button')
+        b.className = 'item' + (on ? ' on' : '')
+        b.innerHTML = '<span class="n">' + esc(m.name) + '</span>' +
+          (m.reasoning ? '<span class="b">会思考</span>' : '') + (on ? '<span class="b">当前</span>' : '')
+        b.onclick = async () => {
+          const res = await api('/api/model', { provider: g.id, model: m.id })
+          if (!res.ok) return alert(res.error || '切换失败')
+          closeSheet()
+          schedule()
+        }
+        box.append(b)
+      }
+    }
+    if (!(r.groups || []).length) box.insertAdjacentHTML('beforeend', '<div class="item"><span class="n" style="color:var(--dim)">没有可选模型</span></div>')
+    return
+  }
+
+  if (kind === 'perm') {
+    $('#sheet').hidden = false
+    const p = st?.settings?.permission
+    box.innerHTML = '<h3>权限（沙箱 + 审批策略）</h3>'
+    if (!p) {
+      box.innerHTML += '<div class="item"><span class="n" style="color:var(--dim)">这个宿主没有权限预设</span></div>'
+      return
+    }
+    for (const o of p.options || []) {
+      const b = document.createElement('button')
+      b.className = 'item' + (o.value === p.current ? ' on' : '')
+      b.innerHTML = '<span class="n">' + esc(o.name) +
+        (o.description ? '<br><span class="b">' + esc(o.description) + '</span>' : '') + '</span>'
+      b.onclick = async () => {
+        const res = await api('/api/permission', { preset: o.value })
+        if (!res.ok) return alert(res.error || '切换失败')
+        closeSheet()
+        schedule()
+      }
+      box.append(b)
+    }
+    return
+  }
+
   if (kind === 'sessions') {
     box.innerHTML = '<h3>切换会话</h3>'
     for (const s of st.sessions) {

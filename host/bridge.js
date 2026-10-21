@@ -139,27 +139,141 @@ export class Bridge {
 
   /* ── 下命令 ─────────────────────────────────────────────── */
 
-  async say({ text, sessionId, mode }) {
+  async say({ text, sessionId, mode, files }) {
     const body = String(text || '').trim()
-    if (!body) throw new Error('空消息')
+    const attachments = Array.isArray(files) ? files.filter((f) => f?.receiptId && f?.file) : []
+    if (!body && !attachments.length) throw new Error('空消息')
     const sc = this.ctx.get?.('sessionController')
     if (!sc?.prompt) throw new Error('sessionController 不可用（宿主还没起来）')
     const sid = sessionId || this.targetSession()
     if (!sid) throw new Error('没有可用会话：先在 GUI 里开一个对话')
-    await sc.prompt(
-      {
-        requestId: `pb-${uid()}`,
-        sessionId: sid,
-        mode: mode === 'steer' ? 'steer' : 'queue',
-        content: [{ type: 'text', text: body }],
-        clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      },
-      new AbortController().signal,
-    )
+
+    const requestId = `pb-${uid()}`
+    const content = []
+    if (body) content.push({ type: 'text', text: body })
+    for (const f of attachments) content.push({ type: 'file', attachment: f.file })
+
+    // 附件先按 requestId 绑定，prompt 被接收后才 commit；失败要让绑定回滚
+    let binding = null
+    const uploads = this.ctx.get?.('fileUploads')
+    const agent = this.ctx.get?.('agents')?.get?.(sid)
+    if (attachments.length && uploads?.bindPrompt && agent) {
+      binding = uploads.bindPrompt(agent, attachments.map((f) => f.receiptId), requestId)
+    }
+
+    try {
+      await sc.prompt(
+        {
+          requestId,
+          sessionId: sid,
+          mode: mode === 'steer' ? 'steer' : 'queue',
+          content,
+          clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        },
+        new AbortController().signal,
+      )
+      try {
+        binding?.commit?.()
+      } catch {}
+    } catch (e) {
+      try {
+        binding?.[Symbol.dispose]?.()
+      } catch {}
+      throw e
+    }
+
     this.setTarget(sid)
-    this.pushRecent(sid, { role: 'user', text: body, time: Date.now(), seq: -1 })
+    // 占位消息：真实 user/message 到达时会被替换掉，避免手机上出现两条一样的
+    this.pushRecent(sid, {
+      role: 'user',
+      text: body || attachments.map((f) => f.file?.name || '文件').join('、'),
+      time: Date.now(),
+      seq: -1,
+      pending: true,
+      files: attachments.map((f) => f.file?.name).filter(Boolean),
+    })
     this.broadcast()
     return { ok: true, sessionId: sid }
+  }
+
+  /* ── 会话级设置：模型 / 权限 / Plan ───────────────────── */
+
+  sessionOf(sid) {
+    return this.ctx.get?.('sessions')?.get?.(sid)
+  }
+
+  agentOf(sid) {
+    return this.ctx.get?.('agents')?.get?.(sid)
+  }
+
+  settings(sid) {
+    const sessionId = sid || this.targetSession()
+    if (!sessionId) return null
+    const out = { sessionId, model: null, permission: null, plan: null, error: null }
+    try {
+      const session = this.sessionOf(sessionId)
+      const agent = this.agentOf(sessionId)
+      const cfg = session?.requestHeader?.()?.config
+      if (cfg) out.model = { provider: cfg.provider, model: cfg.model, reasoningEffort: cfg.reasoningEffort || null }
+      const pp = this.ctx.get?.('permissionPresets')
+      if (pp && session) {
+        const cat = pp.catalog()
+        out.permission = { current: pp.current(session), options: cat?.options || [] }
+      }
+      const pm = this.ctx.get?.('planMode')
+      if (pm && agent) out.plan = pm.get(agent)
+    } catch (e) {
+      out.error = String(e?.message || e)
+    }
+    return out
+  }
+
+  async models() {
+    const sc = this.ctx.get?.('sessionController')
+    if (!sc?.modelCatalog) throw new Error('modelCatalog 不可用')
+    const cat = await sc.modelCatalog()
+    const sid = this.targetSession()
+    const cfg = this.sessionOf(sid)?.requestHeader?.()?.config
+    return {
+      ok: true,
+      groups: cat?.groups || [],
+      failures: cat?.failures || [],
+      current: cfg ? { provider: cfg.provider, model: cfg.model, reasoningEffort: cfg.reasoningEffort || null } : null,
+    }
+  }
+
+  async selectModel({ provider, model, reasoningEffort, sessionId }) {
+    const sc = this.ctx.get?.('sessionController')
+    const sid = sessionId || this.targetSession()
+    if (!sc?.selectModel || !sid) throw new Error('没有可用会话')
+    if (!provider || !model) throw new Error('缺 provider / model')
+    await sc.selectModel({
+      sessionId: sid,
+      provider,
+      model,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    })
+    this.broadcast()
+    return { ok: true }
+  }
+
+  setPermission({ preset, sessionId }) {
+    const pp = this.ctx.get?.('permissionPresets')
+    const sid = sessionId || this.targetSession()
+    const session = this.sessionOf(sid)
+    if (!pp?.set || !session) throw new Error('权限预设不可用')
+    pp.set(session, String(preset))
+    this.broadcast()
+    return { ok: true }
+  }
+
+  setPlan({ active, sessionId }) {
+    const pm = this.ctx.get?.('planMode')
+    const agent = this.agentOf(sessionId || this.targetSession())
+    if (!pm?.set || !agent) throw new Error('Plan 模式不可用')
+    const result = pm.set(agent, Boolean(active))
+    this.broadcast()
+    return { ok: true, result }
   }
 
   async stop(sessionId) {
@@ -309,7 +423,13 @@ export class Bridge {
       if (text) this.pushRecent(sid, { role: 'assistant', text, time: event.time || Date.now(), seq: event.seq })
     } else if (event.type === 'user/message') {
       const text = textOf(event.data)
-      if (text) this.pushRecent(sid, { role: 'user', text, time: event.time || Date.now(), seq: event.seq })
+      if (text) {
+        // 手机发出去时插了一条占位（pending），真实事件到了就把它摘掉，否则显示两条
+        const rows = this.recent.get(sid) || []
+        const at = rows.findIndex((m) => m.pending && (m.text === text || !m.text))
+        if (at >= 0) rows.splice(at, 1)
+        this.pushRecent(sid, { role: 'user', text, time: event.time || Date.now(), seq: event.seq })
+      }
     } else {
       return
     }
@@ -382,6 +502,7 @@ export class Bridge {
       target,
       pending: this.pendingList(),
       messages: msgs,
+      settings: this.settings(target),
       vapid: this.pusher.publicKey,
       push: {
         enabled: !!this.store.config.pushEnabled,

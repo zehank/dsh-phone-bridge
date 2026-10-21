@@ -257,6 +257,74 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
       }
     }
 
+    if (pathname === '/api/upload' && req.method === 'POST') {
+      const uploads = ctx.get?.('fileUploads')
+      if (!uploads?.uploadStream) return json(res, 200, { ok: false, error: '这个宿主没有 fileUploads' })
+      const sid = url.searchParams.get('sessionId') || bridge.targetSession()
+      if (!sid) return json(res, 200, { ok: false, error: '没有可用会话' })
+      const name = String(url.searchParams.get('name') || 'file').slice(0, 120)
+      const chunks = []
+      let total = 0
+      let tooBig = false
+      await new Promise((resolve) => {
+        req.on('data', (c) => {
+          total += c.length
+          if (total > 25 << 20) {
+            tooBig = true
+            req.destroy()
+          } else chunks.push(c)
+        })
+        req.on('end', resolve)
+        req.on('error', resolve)
+      })
+      if (tooBig) return json(res, 200, { ok: false, error: '文件太大（25MB 上限）' })
+      try {
+        const data = (async function* () {
+          yield Buffer.concat(chunks)
+        })()
+        const value = await uploads.uploadStream({ sessionId: sid, data, name })
+        ctx.logger?.info?.(`phone-bridge: 收到文件 ${name} ${total}B`)
+        return json(res, 200, { ok: true, receiptId: value.receiptId, file: value.file })
+      } catch (e) {
+        return json(res, 200, { ok: false, error: String(e?.message || e) })
+      }
+    }
+
+    if (pathname === '/api/models') {
+      try {
+        return json(res, 200, await bridge.models())
+      } catch (e) {
+        return json(res, 200, { ok: false, error: String(e?.message || e) })
+      }
+    }
+
+    if (pathname === '/api/model' && req.method === 'POST') {
+      const body = await readBody(req)
+      try {
+        return json(res, 200, await bridge.selectModel(body))
+      } catch (e) {
+        return json(res, 200, { ok: false, error: String(e?.message || e) })
+      }
+    }
+
+    if (pathname === '/api/permission' && req.method === 'POST') {
+      const body = await readBody(req)
+      try {
+        return json(res, 200, bridge.setPermission(body))
+      } catch (e) {
+        return json(res, 200, { ok: false, error: String(e?.message || e) })
+      }
+    }
+
+    if (pathname === '/api/plan' && req.method === 'POST') {
+      const body = await readBody(req)
+      try {
+        return json(res, 200, bridge.setPlan(body))
+      } catch (e) {
+        return json(res, 200, { ok: false, error: String(e?.message || e) })
+      }
+    }
+
     if (pathname === '/api/stop' && req.method === 'POST') {
       const body = await readBody(req)
       return json(res, 200, await bridge.stop(body.sessionId))

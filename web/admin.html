@@ -73,6 +73,11 @@
   </div>
 
   <div class="card">
+    <h2>最近审批（谁先答的）</h2>
+    <div id="appr"></div>
+  </div>
+
+  <div class="card">
     <h2>手机端上报（排查用）</h2>
     <div id="client"></div>
   </div>
@@ -104,6 +109,13 @@ function paint(s) {
       load()
     }
   }
+  const ap = (s.approvals || []).slice(-8).reverse()
+  $('#appr').innerHTML = ap.length
+    ? ap.map((a) => `<div class="row"><span class="n">${esc(a.tool || '')}<br><span class="b">${esc(a.sessionId || '').slice(0, 22)}</span></span>
+        <span class="tag ${a.by === 'phone' ? 'ok' : ''}">${esc(a.stage)}${a.by ? ' · ' + esc(a.by) : ''}</span>
+        <span class="b">${new Date(a.at).toLocaleTimeString()}</span></div>`).join('')
+    : '<div class="row"><span class="n" style="color:var(--dim)">还没有审批记录</span></div>'
+
   const c = s.client
   $('#client').innerHTML = !c
     ? '<div class="row"><span class="n" style="color:var(--dim)">还没有上报（手机打开页面后会出现）</span></div>'

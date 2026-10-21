@@ -186,7 +186,8 @@
 
 <script>
 const $ = (s) => document.querySelector(s)
-const S = { token: localStorage.getItem('pb.token') || '', state: null, es: null, timer: null, sheet: null, files: [], presetNames: {} }
+const BUILD = '__BUILD__'
+const S = { token: localStorage.getItem('pb.token') || '', state: null, es: null, timer: null, sheet: null, files: [], presetNames: {}, reloaded: false }
 
 const api = async (p, body) => {
   const opt = { headers: { 'content-type': 'application/json', authorization: 'Bearer ' + S.token } }
@@ -254,6 +255,12 @@ function schedule() {
 async function refresh() {
   try {
     S.state = await api('/api/state')
+    // 服务端版本变了（插件更新）→ 自己重载一次，别一直跑旧 JS
+    if (S.state.build && BUILD !== S.state.build && !S.reloaded) {
+      S.reloaded = true
+      location.reload()
+      return
+    }
     render()
   } catch (e) {
     setDot('off')
@@ -794,6 +801,7 @@ async function openSheet(kind) {
       alert(r.ok ? '已发送' : '失败：' + (r.error || r.skipped || '未知'))
     })
     add('本机地址', location.origin)
+    add('页面版本', BUILD)
     add('设备', st.device)
     box.append(Object.assign(document.createElement('div'), { className: 'sep' }))
     add('断开这台手机', '清除配对', async () => {

@@ -47,6 +47,7 @@ export class Bridge {
     this.stats = new Map()
     this.liveCwd = new Map()
     this.ctxBuf = new Map()
+    this.approvalLog = []
     this.balanceCache = null
     this.balanceAt = 0
   }
@@ -413,8 +414,22 @@ export class Bridge {
       .catch(() => {})
     const onAbort = () => this.clearPending(entry.id)
     req?.signal?.addEventListener?.('abort', onAbort, { once: true })
+    this.logApproval({ id: entry.id, callId: req?.callId || null, tool: entry.tool, sessionId: sid, stage: 'pushed' })
+    const desktopTagged = desktop.then((v) => ({ by: 'desktop', v }), (e) => ({ by: 'desktop-error', e }))
     try {
-      return await Promise.race([entry.promise, desktop])
+      const first = await Promise.race([entry.promise.then((v) => ({ by: 'phone', v })), desktopTagged])
+      this.logApproval({
+        id: entry.id,
+        callId: req?.callId || null,
+        tool: entry.tool,
+        sessionId: sid,
+        stage: 'decided',
+        by: first?.by,
+        outcome: first?.v || (first?.e ? 'error' : null),
+      })
+      if (first?.by === 'phone') return first.v
+      if (first?.by === 'desktop-error') throw first.e
+      return first.v
     } finally {
       req?.signal?.removeEventListener?.('abort', onAbort)
       this.clearPending(entry.id)
@@ -455,6 +470,15 @@ export class Bridge {
       req?.signal?.removeEventListener?.('abort', onAbort)
       this.clearPending(entry.id)
     }
+  }
+
+  /** 审批留痕：谁先答、什么时候、结果是什么，写进 approvals.json 给管理页看 */
+  logApproval(entry) {
+    this.approvalLog.push({ ...entry, at: Date.now() })
+    if (this.approvalLog.length > 20) this.approvalLog.splice(0, this.approvalLog.length - 20)
+    try {
+      this.store.save('approvals.json', this.approvalLog.slice(-20))
+    } catch {}
   }
 
   reasonOf(req) {

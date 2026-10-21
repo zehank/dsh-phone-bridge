@@ -36,6 +36,10 @@
 
 顶栏一行不够就左右滑。
 
+页面自带版本号（`BUILD`），发现和宿主版本不一致会自动重载一次，避免 PWA 一直跑旧 JS。
+
+审批全过程写进 `~/.dsh/phone-bridge/approvals.json`（谁先答、时间、结果），电脑管理页「最近审批」能直接看。
+
 消息流只显示你说的话和我的回答。DSH 每轮注入的 `time-context` / `runtime-context` / `dsh-mnemon`
 （`user/message` 里 `source.kind !== 'user'` 的那些）不会当消息出现，而是折进回答上方的
 「思考过程」按钮，点开才看得到。下面那行「用量」收起时只显示轮/步/token 摘要，点开是浮层：输入输出、

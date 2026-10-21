@@ -29,6 +29,16 @@ const MIME = {
 
 const LOCAL = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
 
+/** 插件版本：页面拿它和自己嵌的 BUILD 比对，不一致就自动重载（否则会一直跑旧 JS） */
+function readBuild(root) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, '..', 'package.json'), 'utf8'))
+    return String(pkg.version || '0')
+  } catch {
+    return '0'
+  }
+}
+
 /** 装到主屏后两台电脑的图标靠这个名字区分 */
 export const HOST_NAME = String(os.hostname() || 'dsh').replace(/\.local$/i, '')
 
@@ -73,6 +83,7 @@ function readBody(req) {
 }
 
 export function createServer({ ctx, store, bridge, pusher, webRoot }) {
+  const BUILD = readBuild(webRoot)
   const port = () => Number(store.config.port) || 8791
   const localUrl = () => `http://127.0.0.1:${port()}/`
   const publicUrl = () => String(store.reloadConfig().publicUrl || '').trim()
@@ -128,6 +139,8 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
       },
       sessions: bridge.liveSessions(),
       client: store.load('diag.json', null),
+      build: BUILD,
+      approvals: store.load('approvals.json', []),
       tailscale: {
         dnsName: ts.dnsName,
         url: ts.url,
@@ -159,7 +172,10 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
 
   function phonePage() {
     try {
-      return fs.readFileSync(path.join(webRoot, 'phone.html'), 'utf8').replaceAll('__HOST__', HOST_NAME)
+      return fs
+        .readFileSync(path.join(webRoot, 'phone.html'), 'utf8')
+        .replaceAll('__HOST__', HOST_NAME)
+        .replaceAll('__BUILD__', BUILD)
     } catch {
       return '<!doctype html><meta charset="utf-8"><p>phone.html 丢了</p>'
     }
@@ -222,7 +238,7 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
 
     if (!device) return json(res, 401, { ok: false, error: '未配对' })
 
-    if (pathname === '/api/state') return json(res, 200, bridge.snapshot(device.name))
+    if (pathname === '/api/state') return json(res, 200, { ...bridge.snapshot(device.name), build: BUILD })
 
     if (pathname === '/api/stream') {
       res.writeHead(200, {

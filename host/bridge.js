@@ -396,7 +396,9 @@ export class Bridge {
     if (!this.store.config.approvalViaPhone) return next()
     // 先别叫醒桌面：给手机一个抢先的窗口期，手机在窗口内答了，桌面就根本不弹框
     // （否则桌面那个对话框不会因为手机答了而自动消失，是他报过的"电脑端一直挂着"）。
-    const delayMs = Math.max(0, Number(this.store.config.desktopDelayMs ?? 6000))
+    // 只有手机页面真的连着（SSE 订阅者 > 0）才值得等那几秒；没连就直接弹桌面框，别白等
+    const phoneWatching = this.subscribers.size > 0
+    const delayMs = phoneWatching ? Math.max(0, Number(this.store.config.desktopDelayMs ?? 6000)) : 0
     let desktopStarted = false
     let desktopPromise = null
     let settled = false
@@ -429,7 +431,15 @@ export class Bridge {
       .catch(() => {})
     const onAbort = () => this.clearPending(entry.id)
     req?.signal?.addEventListener?.('abort', onAbort, { once: true })
-    this.logApproval({ id: entry.id, callId: req?.callId || null, tool: entry.tool, sessionId: sid, stage: 'pushed' })
+    this.logApproval({
+      id: entry.id,
+      callId: req?.callId || null,
+      tool: entry.tool,
+      sessionId: sid,
+      stage: 'pushed',
+      phoneWatching,
+      delayMs,
+    })
     const timer = setTimeout(() => {
       if (!settled) startDesktop()
     }, delayMs)

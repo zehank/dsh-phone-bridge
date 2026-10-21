@@ -192,6 +192,7 @@ console.log('✓ 历史会话可切换 通过')
   const store2 = { ...store, config: { ...store.config, desktopDelayMs: 10000 } }
   const ctx5 = { get: () => undefined, on: () => () => {} }
   const b6 = new Bridge(ctx5, store2, pusher)
+  b6.subscribers.add({ write() {} }) // 手机页面连着，才会给窗口期
   let nextCalled = false
   const p = b6.onApproval({ agent: { id: 's9' }, toolName: 'bash' }, async () => {
     nextCalled = true
@@ -206,3 +207,34 @@ console.log('✓ 历史会话可切换 通过')
   assert.equal(nextCalled, false, '手机先答就不该弹桌面框')
 }
 console.log('✓ 手机优先、桌面不弹框 通过')
+
+// 11) 手机没连着（没有 SSE 订阅者）→ 不等，直接弹桌面框
+{
+  const store3 = { ...store, config: { ...store.config, desktopDelayMs: 10000 } }
+  const b7 = new Bridge({ get: () => undefined, on: () => () => {} }, store3, pusher)
+  let nextAt = 0
+  const t0 = Date.now()
+  const p = b7.onApproval({ agent: { id: 's10' }, toolName: 'bash' }, async () => {
+    nextAt = Date.now() - t0
+    return 'allowed-once'
+  })
+  assert.equal(await p, 'allowed-once')
+  assert.ok(nextAt < 200, `没连着就该立刻弹桌面（实测 ${nextAt}ms）`)
+}
+
+// 12) 手机连着 → 给窗口期，桌面不立刻弹
+{
+  const store4 = { ...store, config: { ...store.config, desktopDelayMs: 10000 } }
+  const b8 = new Bridge({ get: () => undefined, on: () => () => {} }, store4, pusher)
+  b8.subscribers.add({ write() {} }) // 假装手机页面连着
+  let nextCalled = false
+  const p = b8.onApproval({ agent: { id: 's11' }, toolName: 'bash' }, async () => {
+    nextCalled = true
+    return 'unavailable'
+  })
+  await sleep(120)
+  assert.equal(nextCalled, false, '手机连着时桌面应被延迟')
+  b8.answer([...b8.pending.keys()][0], { action: 'allow' })
+  assert.equal(await p, 'allowed-once')
+}
+console.log('✓ 手机没连就不延迟 通过')

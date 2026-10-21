@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "手机桥",
+    "description": "手机装到主屏，远程给 DSH 下命令、批准工具调用、收消息推送（Tailscale + Web Push，不经过第三方）。"
+  }
+}

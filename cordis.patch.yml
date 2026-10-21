@@ -1,0 +1,6 @@
+# phone-bridge：一条宿主行。
+# 手机页面 + Web Push 都由这个包自己在 127.0.0.1:8791 上起，
+# Tailscale Serve 负责把它变成 tailnet 内可访问的 HTTPS 域名（推送需要安全上下文）。
+- insert:
+    - id: phone-bridge
+      name: '@local/phone-bridge'

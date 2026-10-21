@@ -1,0 +1,29 @@
+{
+  "name": "@local/phone-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Phone Bridge: 手机遥控 DeepSeek Harness（Tailscale + Web Push）",
+  "exports": {
+    ".": "./host/index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "host",
+    "web",
+    "locale",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md"
+  ],
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "web-push": "^3.6.7"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

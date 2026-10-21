@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Phone Bridge",
+    "description": "Control DeepSeek Harness from your phone: send prompts, approve tool calls, and receive push notifications (Tailscale + Web Push, self-hosted)."
+  }
+}

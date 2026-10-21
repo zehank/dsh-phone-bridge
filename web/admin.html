@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>手机桥 · 电脑端</title>
+<link rel="icon" href="/icon-192.png">
+<style>
+  :root{--bg:#0b1220;--card:#141f36;--card2:#1a2742;--line:#22314f;--text:#e8eefc;--muted:#8b9bb4;--dim:#63718a;--accent:#4f8cff;--ok:#34d399;--bad:#ef4444}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;padding:32px 20px 60px}
+  .wrap{max-width:620px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:14px}
+  .card h2{font-size:13px;color:var(--muted);font-weight:600;margin:0 0 12px;letter-spacing:.4px}
+  .pair{display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+  .qr{width:220px;height:220px;background:#fff;border-radius:12px;padding:8px;flex:0 0 auto}
+  .qr svg{width:100%;height:100%;display:block}
+  .code{font-size:34px;letter-spacing:9px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--accent)}
+  .url{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--text);word-break:break-all;background:var(--card2);padding:8px 10px;border-radius:9px;margin-top:8px}
+  .hint{color:var(--dim);font-size:12.5px;margin-top:10px}
+  code{font-family:ui-monospace,Menlo,monospace;background:var(--card2);padding:2px 6px;border-radius:6px;font-size:12.5px}
+  button{font:inherit;color:inherit;background:var(--card2);border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font-size:13.5px}
+  button.primary{background:var(--accent);font-weight:600}
+  button:active{transform:scale(.99)}
+  .row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .row:last-child{border-bottom:0}
+  .row .n{flex:1}
+  .row .b{color:var(--dim);font-size:12px}
+  .tag{font-size:11px;padding:2px 7px;border-radius:6px;background:var(--card2);color:var(--muted)}
+  .tag.ok{background:#12352a;color:var(--ok)}
+  .acts{display:flex;gap:9px;margin-top:14px;flex-wrap:wrap}
+  .msg{font-size:13px;color:var(--muted);min-height:18px;margin-top:10px}
+  .editrow{display:flex;gap:8px;margin-top:6px}
+  .editrow input{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px 10px;font-size:12.5px;font-family:ui-monospace,Menlo,monospace;min-width:0}
+  .editrow button{flex:0 0 auto}
+  .msg.bad{color:var(--bad)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>手机桥</h1>
+  <div class="sub">手机装到主屏后，可以下命令、批操作、收推送。这个页面只在本机打得开。</div>
+
+  <div class="card">
+    <h2>手机端</h2>
+    <div class="pair">
+      <div class="qr" id="qr"></div>
+      <div style="flex:1;min-width:220px">
+        <div class="hint" style="margin:0 0 4px">用手机扫这个码（Tailscale 打开），或在手机浏览器里打开：</div>
+        <div class="url" id="url">—</div>
+        <div class="hint" style="margin-top:8px">地址不对就直接改（存进 config.json）：</div>
+        <div class="editrow">
+          <input id="urlInput" spellcheck="false" placeholder="https://机器名.ts.net/">
+          <button id="urlSave">保存</button>
+        </div>
+        <div class="hint">配对码：</div>
+        <div class="code" id="code">------</div>
+        <div class="hint">打开后输入这 6 位，只输一次。</div>
+      </div>
+    </div>
+    <div class="acts">
+      <button class="primary" id="testBtn">发一条测试推送</button>
+      <button id="codeBtn">换一个配对码</button>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>已配对设备</h2>
+    <div id="devices"></div>
+  </div>
+
+  <div class="card">
+    <h2>手机端上报（排查用）</h2>
+    <div id="client"></div>
+  </div>
+
+  <div class="card">
+    <h2>状态</h2>
+    <div id="status"></div>
+  </div>
+</div>
+
+<script>/*__BOOT__*/</script>
+<script>
+const A = window.__ADMIN__ || {}
+const $ = (s) => document.querySelector(s)
+
+function paint(s) {
+  $('#code').textContent = s.code
+  $('#url').textContent = s.url || '（还没配 Tailscale 域名）'
+  $('#qr').innerHTML = s.qr || ''
+  $('#devices').innerHTML = s.devices.length
+    ? s.devices.map((d) => `<div class="row"><span class="n">${esc(d.name)}</span>
+        <span class="tag ${d.subscribed ? 'ok' : ''}">${d.subscribed ? '推送已订阅' : '无推送'}</span>
+        <span class="b">${esc((d.createdAt || '').slice(0, 10))}</span>
+        <button data-token="${esc(d.token)}" class="rm">移除</button></div>`).join('')
+    : '<div class="row"><span class="n" style="color:var(--dim)">还没有设备配对</span></div>'
+  for (const b of document.querySelectorAll('.rm')) {
+    b.onclick = async () => {
+      await fetch('/api/admin/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prefix: b.dataset.token.replace('…', '') }) })
+      load()
+    }
+  }
+  const c = s.client
+  $('#client').innerHTML = !c
+    ? '<div class="row"><span class="n" style="color:var(--dim)">还没有上报（手机打开页面后会出现）</span></div>'
+    : [
+        `<div class="row"><span class="n">阶段</span><span class="b">${esc(c.stage || '')} · ${new Date(c.receivedAt || Date.now()).toLocaleTimeString()}</span></div>`,
+        `<div class="row"><span class="n">通知权限</span><span class="b">${esc(c.permission || '')}</span></div>`,
+        `<div class="row"><span class="n">Service Worker</span><span class="b">${esc(c.sw || '')}</span></div>`,
+        `<div class="row"><span class="n">已订阅推送</span><span class="b">${c.subscribed ? '是' : '否'}</span></div>`,
+        `<div class="row"><span class="n">主屏模式</span><span class="b">${c.standalone ? '是' : '否'}</span></div>`,
+        c.error ? `<div class="row" style="display:block"><span class="n">错误</span><div class="hint" style="color:var(--bad)">${esc(c.error)}</div></div>` : '',
+        `<div class="hint" style="margin-top:8px;word-break:break-all">${esc(c.ua || '')}</div>`,
+      ].join('')
+
+  const ts = s.tailscale || {}
+  $('#status').innerHTML = [
+    `<div class="row"><span class="n">本机监听</span><span class="b">127.0.0.1:${s.port}</span></div>`,
+    `<div class="row"><span class="n">Web Push</span><span class="b">${s.push.enabled ? '开' : '关'} · 已订阅 ${s.push.subscribed} 台</span></div>`,
+    s.push.lastError ? `<div class="row"><span class="n">最近推送错误</span><span class="b" style="color:var(--bad)">${esc(s.push.lastError)}</span></div>` : '',
+    `<div class="row"><span class="n">电脑上的会话</span><span class="b">${s.sessions.length} 个</span></div>`,
+    `<div class="row"><span class="n">Tailscale 域名</span><span class="b">${esc(ts.dnsName || (ts.configuredUrl ? '用配置里的地址' : '未知'))}</span></div>`,
+    `<div class="row"><span class="n">HTTPS (Serve)</span>${ts.serve
+        ? '<span class="tag ok">已接通</span>'
+        : ts.serveKnown === false
+          ? '<span class="b">未知（宿主里调不动 CLI）</span>'
+          : '<span class="b">未接通</span><button id="serveBtn" class="primary">接通</button>'}</div>`,
+    ts.hint ? `<div class="hint" style="margin-top:8px">${esc(ts.hint)}</div>` : '',
+    ts.raw ? `<details style="margin-top:8px"><summary class="hint" style="cursor:pointer">CLI 原始输出</summary><div class="hint" style="white-space:pre-wrap">${esc(ts.raw)}</div></details>` : '',
+  ].join('')
+  const ui = $('#urlInput')
+  if (ui && document.activeElement !== ui) ui.value = ts.configuredUrl || s.url || ''
+  const us = $('#urlSave')
+  if (us) us.onclick = async () => {
+    const r = await fetch('/api/admin/url', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: $('#urlInput').value.trim() }),
+    })
+    const j = await r.json()
+    const m = $('#msg')
+    if (j.ok) {
+      paint(j.state)
+      m.className = 'msg'
+      m.textContent = '地址已保存'
+    } else {
+      m.className = 'msg bad'
+      m.textContent = j.error || '保存失败'
+    }
+  }
+  const sb = $('#serveBtn')
+  if (sb) sb.onclick = async () => {
+    sb.disabled = true
+    sb.textContent = '正在接通…'
+    const r = await fetch('/api/admin/tailscale', { method: 'POST' })
+    const j = await r.json()
+    if (j.state) paint(j.state)
+    if (j.link) {
+      $('#status').insertAdjacentHTML('beforeend',
+        `<div class="hint" style="margin-top:10px">这台 tailnet 还没开启 Serve / HTTPS，点这个链接开启后再按一次「接通」：<br><a href="${esc(j.link)}" target="_blank" style="color:var(--accent)">${esc(j.link)}</a></div>`)
+    } else if (j.cliUnavailable) {
+      $('#status').insertAdjacentHTML('beforeend',
+        `<div class="hint" style="margin-top:10px">App 里调不动 Tailscale CLI。在「终端」里跑一次就行（只用跑一次）：<br><code>tailscale serve --bg ${s.port}</code></div>`)
+    } else if (!j.ok && j.text) {
+      $('#status').insertAdjacentHTML('beforeend', `<div class="hint" style="color:var(--bad);margin-top:10px">${esc(j.text)}</div>`)
+    }
+  }
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
+
+async function load() {
+  const r = await fetch('/api/admin/state')
+  const s = await r.json()
+  paint(s)
+}
+
+$('#testBtn').onclick = async () => {
+  const r = await fetch('/api/admin/test', { method: 'POST' })
+  const j = await r.json()
+  const m = $('#msg')
+  m.className = 'msg' + (j.ok ? '' : ' bad')
+  m.textContent = j.ok ? '已发到手机' : '没发出去：' + (j.skipped || j.error || '手机上还没订阅推送')
+}
+$('#codeBtn').onclick = async () => {
+  const r = await fetch('/api/admin/code', { method: 'POST' })
+  paint(await r.json())
+}
+
+paint(A)
+load()
+setInterval(load, 5000)
+</script>
+</body>
+</html>

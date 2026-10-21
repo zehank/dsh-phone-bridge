@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0b1220">
+<meta name="mobile-web-app-capable" content="yes">
+<title>手机桥 · DSH</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<style>
+  :root{
+    --bg:#0b1220; --bg2:#0f1830; --card:#141f36; --card2:#1a2742;
+    --line:#22314f; --text:#e8eefc; --muted:#8b9bb4; --dim:#63718a;
+    --accent:#4f8cff; --accent-soft:#1d3358; --ok:#34d399; --warn:#f59e0b; --bad:#ef4444;
+    --r:14px; --safe-b:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--text);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+  input,textarea{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:11px 13px;outline:none;width:100%}
+  input:focus,textarea:focus{border-color:var(--accent)}
+  [hidden]{display:none!important}
+
+  /* ── 配对 ── */
+  .gate{flex:1;display:flex;flex-direction:column;justify-content:center;gap:14px;padding:32px 24px calc(32px + var(--safe-b))}
+  .gate h1{font-size:24px;margin:0 0 4px;letter-spacing:.5px}
+  .gate p{margin:0;color:var(--muted);font-size:14px}
+  .gate input{font-size:28px;letter-spacing:12px;text-align:center;padding:14px;font-variant-numeric:tabular-nums}
+  .btn{background:var(--accent);border-radius:12px;padding:13px;font-weight:600;text-align:center;width:100%}
+  .btn:active{transform:scale(.985)}
+  .btn.ghost{background:var(--card2);color:var(--muted);font-weight:500}
+  .err{color:var(--bad);font-size:13px;min-height:18px;text-align:center}
+
+  /* ── 主体 ── */
+  #app{flex:1;display:flex;flex-direction:column;min-height:0}
+  header{
+    display:flex;align-items:center;gap:10px;padding:calc(10px + env(safe-area-inset-top,0px)) 14px 10px;
+    background:var(--bg2);border-bottom:1px solid var(--line);flex:0 0 auto;
+  }
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:0 0 auto}
+  .dot.on{background:var(--ok)}
+  .dot.run{background:var(--accent);animation:pulse 1.3s infinite}
+  .dot.off{background:var(--bad)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .sess{flex:1;text-align:left;font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sess small{color:var(--dim);font-weight:400;font-size:12px;margin-left:6px}
+  .icon{width:34px;height:34px;border-radius:10px;color:var(--muted);font-size:19px;line-height:34px;text-align:center}
+  .icon:active{background:var(--card2)}
+
+  .banner{
+    margin:10px 14px 0;padding:10px 12px;border-radius:12px;background:var(--accent-soft);
+    border:1px solid #2a4c86;font-size:13px;display:flex;gap:10px;align-items:center;flex:0 0 auto;
+  }
+  .banner button{margin-left:auto;background:var(--accent);padding:7px 12px;border-radius:9px;font-size:13px;font-weight:600;flex:0 0 auto}
+
+  #pending{flex:0 0 auto;padding:0 14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:13px;margin-top:10px}
+  .card.warn{border-color:#5a4319;background:#241d10}
+  .card .k{font-size:12px;letter-spacing:.4px;color:var(--warn);font-weight:600}
+  .card .t{font-weight:600;margin:5px 0 2px;word-break:break-word}
+  .card .d{font-size:13px;color:var(--muted);word-break:break-word;white-space:pre-wrap}
+  .card .acts{display:flex;gap:9px;margin-top:11px}
+  .card .acts button{flex:1;padding:11px;border-radius:11px;font-weight:600;font-size:14px}
+  .allow{background:var(--accent)}
+  .deny{background:var(--card2);color:var(--muted)}
+  .opts{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+  .opt{text-align:left;padding:11px 13px;border-radius:11px;background:var(--card2);border:1px solid var(--line)}
+  .opt.sel{border-color:var(--accent);background:var(--accent-soft)}
+  .opt b{display:block;font-size:14px;font-weight:600}
+  .opt span{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+
+  #log{flex:1;overflow-y:auto;padding:12px 14px 6px;-webkit-overflow-scrolling:touch}
+  .msg{margin-bottom:10px;display:flex}
+  .msg.user{justify-content:flex-end}
+  .bubble{max-width:86%;padding:10px 13px;border-radius:15px;font-size:14.5px;white-space:pre-wrap;word-break:break-word}
+  .msg.user .bubble{background:var(--accent-soft);border:1px solid #2a4c86;border-bottom-right-radius:5px}
+  .msg.assistant .bubble{background:var(--card);border:1px solid var(--line);border-bottom-left-radius:5px}
+  .msg .time{font-size:10.5px;color:var(--dim);align-self:flex-end;margin:0 6px 3px}
+  .empty{color:var(--dim);text-align:center;padding:40px 10px;font-size:13.5px;line-height:1.8}
+
+  footer{flex:0 0 auto;padding:8px 12px calc(8px + var(--safe-b));background:var(--bg2);border-top:1px solid var(--line)}
+  .row{display:flex;gap:9px;align-items:flex-end}
+  .row textarea{resize:none;max-height:120px;line-height:1.45;padding:11px 13px}
+  .row .btn{width:auto;flex:0 0 auto;padding:12px 18px}
+  .sub{display:flex;align-items:center;gap:10px;margin-top:6px;font-size:12px;color:var(--dim)}
+  .sub button{margin-left:auto;color:var(--muted);padding:4px 8px;border-radius:8px;background:var(--card2)}
+
+  /* ── 抽屉 ── */
+  #sheet{position:fixed;inset:0;background:rgba(4,8,16,.6);display:flex;align-items:flex-end;z-index:20}
+  .sheet-in{width:100%;background:var(--bg2);border-radius:18px 18px 0 0;padding:14px 14px calc(18px + var(--safe-b));max-height:78vh;overflow:auto}
+  .sheet-in h3{margin:2px 4px 10px;font-size:15px;color:var(--muted);font-weight:600}
+  .item{display:flex;align-items:center;gap:10px;padding:13px 12px;border-radius:12px;width:100%;text-align:left}
+  .item:active{background:var(--card2)}
+  .item.on{background:var(--accent-soft)}
+  .item .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+  .item .b{color:var(--dim);font-size:12px}
+  .sep{height:1px;background:var(--line);margin:8px 4px}
+</style>
+</head>
+<body>
+
+<div id="gate" class="gate" hidden>
+  <h1>手机桥</h1>
+  <p>输入电脑上 <code>http://127.0.0.1:8791</code> 页面里的 6 位配对码</p>
+  <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="······">
+  <button class="btn" id="pairBtn">连接</button>
+  <div class="err" id="gateErr"></div>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <span class="dot" id="dot"></span>
+    <button class="sess" id="sessBtn">连接中…</button>
+    <button class="icon" id="moreBtn">⋯</button>
+  </header>
+  <div class="banner" id="pushBanner" hidden>
+    <span id="pushBannerText">开通知才能锁屏收到消息</span>
+    <button id="pushBtn">开启</button>
+  </div>
+  <div id="pending"></div>
+  <div id="log"><div class="empty" id="empty">还没有消息。<br>发一句话，或者在电脑上让我干活。</div></div>
+  <footer>
+    <div class="row">
+      <textarea id="input" rows="1" placeholder="给 DSH 下命令…"></textarea>
+      <button class="btn" id="sendBtn">发送</button>
+    </div>
+    <div class="sub">
+      <span id="status">连接中</span>
+      <button id="stopBtn" hidden>中断</button>
+    </div>
+  </footer>
+</div>
+
+<div id="sheet" hidden><div class="sheet-in" id="sheetIn"></div></div>
+
+<script>
+const $ = (s) => document.querySelector(s)
+const S = { token: localStorage.getItem('pb.token') || '', state: null, es: null, timer: null, sheet: null }
+
+const api = async (p, body) => {
+  const opt = { headers: { 'content-type': 'application/json', authorization: 'Bearer ' + S.token } }
+  if (body !== undefined) { opt.method = 'POST'; opt.body = JSON.stringify(body) }
+  const r = await fetch(p, opt)
+  if (r.status === 401) { logout(); throw new Error('未配对') }
+  return r.json()
+}
+
+function logout() {
+  localStorage.removeItem('pb.token')
+  S.token = ''
+  try { S.es?.close() } catch {}
+  S.es = null
+  $('#app').hidden = true
+  $('#gate').hidden = false
+}
+
+/* ── 配对 ── */
+$('#pairBtn').onclick = async () => {
+  const code = $('#code').value.trim()
+  if (code.length !== 6) return ($('#gateErr').textContent = '要 6 位数字')
+  $('#pairBtn').disabled = true
+  $('#gateErr').textContent = ''
+  try {
+    const r = await fetch('/api/pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, name: '手机' }) })
+    const j = await r.json()
+    if (!j.ok) throw new Error(j.error || '配对失败')
+    S.token = j.token
+    localStorage.setItem('pb.token', j.token)
+    await idbSet('token', j.token)
+    start()
+  } catch (e) {
+    $('#gateErr').textContent = String(e.message || e)
+  } finally {
+    $('#pairBtn').disabled = false
+  }
+}
+
+/* ── 启动 ── */
+async function start() {
+  $('#gate').hidden = true
+  $('#app').hidden = false
+  await refresh()
+  connect()
+  registerSW()
+  reportDiag({ stage: 'boot' })
+}
+
+function connect() {
+  try { S.es?.close() } catch {}
+  const es = new EventSource('/api/stream?t=' + encodeURIComponent(S.token))
+  S.es = es
+  es.addEventListener('state', () => schedule())
+  es.onopen = () => setDot()
+  es.onerror = () => { setDot('off') }
+}
+
+function schedule() {
+  clearTimeout(S.timer)
+  S.timer = setTimeout(refresh, 120)
+}
+
+async function refresh() {
+  try {
+    S.state = await api('/api/state')
+    render()
+  } catch (e) {
+    setDot('off')
+  }
+}
+
+/* ── 渲染 ── */
+function setDot(force) {
+  const d = $('#dot')
+  d.className = 'dot'
+  const t = S.state?.sessions?.find((s) => s.id === S.state.target)
+  if (force === 'off') d.classList.add('off')
+  else if (t?.running) d.classList.add('run')
+  else d.classList.add('on')
+}
+
+function fmt(ts) {
+  const d = new Date(ts || Date.now())
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+}
+
+function render() {
+  const st = S.state
+  if (!st) return
+  const target = st.sessions.find((s) => s.id === st.target)
+  $('#sessBtn').textContent = target ? target.label : '没有会话'
+  $('#sessBtn').innerHTML = (target ? esc(target.label) : '没有会话') +
+    (target?.running ? '<small>运行中</small>' : '')
+  $('#stopBtn').hidden = !target?.running
+  $('#status').textContent = target?.running ? '运行中…' : '空闲'
+  setDot()
+  renderPush(st)
+  renderPending(st)
+  renderLog(st)
+}
+
+function renderPush(st) {
+  const banner = $('#pushBanner')
+  if (!st.push.enabled) { banner.hidden = true; return }
+  const perm = typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
+  if (perm === 'granted' && st.push.subscribed) { banner.hidden = true; return }
+  banner.hidden = false
+  $('#pushBannerText').textContent =
+    perm === 'unsupported'
+      ? '这个浏览器不支持通知，请用 Chrome 打开'
+      : perm === 'denied'
+        ? '通知被禁用了：去 系统设置→应用→Chrome→通知 打开'
+        : perm === 'granted'
+          ? '还没在这台手机上订阅推送'
+          : '开通知才能锁屏收到消息'
+}
+
+function renderPending(st) {
+  const box = $('#pending')
+  box.innerHTML = ''
+  for (const p of st.pending) {
+    const card = document.createElement('div')
+    card.className = 'card warn'
+    if (p.kind === 'approval') {
+      card.innerHTML = `<div class="k">要你批准</div><div class="t">${esc(p.tool)}</div>` +
+        (p.reason ? `<div class="d">${esc(p.reason)}</div>` : '') +
+        `<div class="acts"><button class="deny">拒绝</button><button class="allow">允许一次</button></div>`
+      card.querySelector('.allow').onclick = () => decide(p.id, { action: 'allow' }, card)
+      card.querySelector('.deny').onclick = () => decide(p.id, { action: 'deny' }, card)
+    } else {
+      card.innerHTML = `<div class="k">要你回答</div>`
+      for (const q of p.questions || []) {
+        const wrap = document.createElement('div')
+        wrap.innerHTML = (q.header ? `<div class="k" style="color:var(--muted)">${esc(q.header)}</div>` : '') +
+          `<div class="t">${esc(q.question)}</div>` + (q.detail ? `<div class="d">${esc(q.detail)}</div>` : '')
+        const opts = document.createElement('div')
+        opts.className = 'opts'
+        const chosen = new Set()
+        for (const o of q.options || []) {
+          const b = document.createElement('button')
+          b.className = 'opt'
+          b.innerHTML = `<b>${esc(o.label)}</b>${o.description ? `<span>${esc(o.description)}</span>` : ''}`
+          b.onclick = () => {
+            if (q.multiSelect) {
+              chosen.has(o.label) ? chosen.delete(o.label) : chosen.add(o.label)
+            } else {
+              chosen.clear()
+              chosen.add(o.label)
+            }
+            ;[...opts.children].forEach((c) => c.classList.toggle('sel', chosen.has(c.dataset.label)))
+            b.dataset.label = o.label
+            btn.disabled = false
+          }
+          b.dataset.label = o.label
+          opts.append(b)
+        }
+        wrap.append(opts)
+        card.append(wrap)
+      }
+      const btn = document.createElement('button')
+      btn.className = 'btn'
+      btn.style.marginTop = '10px'
+      btn.textContent = '提交'
+      btn.onclick = () => {
+        const answers = [...card.querySelectorAll('.opts')].map((g, i) => {
+          const q = p.questions[i]
+          const selected = [...g.querySelectorAll('.opt.sel')].map((b) => b.dataset.label)
+          return { id: q.id, selected }
+        })
+        decide(p.id, { answers }, card)
+      }
+      card.append(btn)
+    }
+    box.append(card)
+  }
+}
+
+async function decide(id, payload, card) {
+  card.style.opacity = '.5'
+  const r = await api('/api/answer', { id, ...payload })
+  if (!r.ok) card.style.opacity = '1'
+  schedule()
+}
+
+function renderLog(st) {
+  const log = $('#log')
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 120
+  const key = st.target + ':' + (st.messages.at(-1)?.seq ?? 0) + ':' + st.messages.length
+  if (log.dataset.key !== key) {
+    log.dataset.key = key
+    const html = st.messages.map((m) => {
+      const t = `<span class="time">${fmt(m.time)}</span>`
+      return `<div class="msg ${m.role}">${m.role === 'user' ? t : ''}<div class="bubble">${esc(m.text)}</div>${m.role === 'user' ? '' : t}</div>`
+    }).join('')
+    log.innerHTML = html || `<div class="empty" id="empty">${esc(st.sessions.length ? '当前会话还没有消息。' : '电脑上还没有打开的会话。')}</div>`
+  }
+  if (atBottom) log.scrollTop = log.scrollHeight
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
+
+/* ── 发消息 ── */
+async function send() {
+  const el = $('#input')
+  const text = el.value.trim()
+  if (!text) return
+  el.value = ''
+  el.style.height = 'auto'
+  autoGrow(el)
+  const r = await api('/api/say', { text })
+  if (!r.ok) {
+    el.value = text
+    $('#status').textContent = r.error || '发送失败'
+  }
+  schedule()
+}
+$('#sendBtn').onclick = send
+$('#input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send() }
+})
+function autoGrow(el) {
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+}
+$('#input').addEventListener('input', (e) => autoGrow(e.target))
+
+$('#stopBtn').onclick = async () => { await api('/api/stop', {}); schedule() }
+
+/* ── 抽屉：切会话 / 设置 ── */
+$('#sessBtn').onclick = () => openSheet('sessions')
+$('#moreBtn').onclick = () => openSheet('more')
+$('#sheet').onclick = (e) => { if (e.target.id === 'sheet') closeSheet() }
+
+function openSheet(kind) {
+  const st = S.state
+  const box = $('#sheetIn')
+  box.innerHTML = ''
+  if (kind === 'sessions') {
+    box.innerHTML = '<h3>切换会话</h3>'
+    for (const s of st.sessions) {
+      const b = document.createElement('button')
+      b.className = 'item' + (s.id === st.target ? ' on' : '')
+      b.innerHTML = `<span class="n">${esc(s.label)}</span><span class="b">${s.running ? '运行中' : ''}</span>`
+      b.onclick = async () => { await api('/api/target', { sessionId: s.id }); closeSheet(); schedule() }
+      box.append(b)
+    }
+    if (!st.sessions.length) box.innerHTML += '<div class="item"><span class="n" style="color:var(--dim)">电脑上还没有打开的会话</span></div>'
+  } else {
+    box.innerHTML = '<h3>设置</h3>'
+    const add = (label, val, fn) => {
+      const b = document.createElement('button')
+      b.className = 'item'
+      b.innerHTML = `<span class="n">${esc(label)}</span><span class="b">${esc(val || '')}</span>`
+      if (fn) b.onclick = fn
+      box.append(b)
+    }
+    add('推送', st.push.subscribed ? '已订阅' : '未订阅', async () => { await enablePush() })
+    add('测试推送', '发一条', async () => {
+      const r = await api('/api/push/test', {})
+      alert(r.ok ? '已发送' : '失败：' + (r.error || r.skipped || '未知'))
+    })
+    add('本机地址', location.origin)
+    add('设备', st.device)
+    box.append(Object.assign(document.createElement('div'), { className: 'sep' }))
+    add('断开这台手机', '清除配对', async () => {
+      if (!confirm('清除后要重新输配对码')) return
+      await api('/api/logout', {})
+      logout()
+    })
+  }
+  $('#sheet').hidden = false
+}
+function closeSheet() { $('#sheet').hidden = true }
+
+/* ── 推送 ── */
+const b64 = (s) => {
+  const pad = '='.repeat((4 - (s.length % 4)) % 4)
+  const raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'))
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)))
+}
+
+const withTimeout = (p, ms, msg) =>
+  Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(msg)), ms))])
+
+/** 注册 SW 并等它就绪；超时就报错，不再静默卡住 */
+async function swReady() {
+  if (!('serviceWorker' in navigator)) throw new Error('这个浏览器不支持 service worker（可能是微信/内置浏览器，请用 Chrome）')
+  try {
+    await navigator.serviceWorker.register('/sw.js')
+  } catch (e) {
+    throw new Error('service worker 注册失败：' + (e.message || e))
+  }
+  return withTimeout(navigator.serviceWorker.ready, 12000, 'service worker 12 秒没就绪（页面没加载完？）')
+}
+
+async function registerSW() {
+  try {
+    const reg = await swReady()
+    await idbSet('token', S.token)
+    const sub = await reg.pushManager.getSubscription()
+    if (sub) await api('/api/subscribe', { subscription: sub.toJSON() })
+  } catch (e) {
+    console.warn('sw', e)
+  }
+}
+
+/** 把手机侧的诊断信息报给电脑，方便在管理页看出来卡在哪一步 */
+async function reportDiag(extra = {}) {
+  try {
+    const out = {
+      ...extra,
+      at: Date.now(),
+      permission: typeof Notification !== 'undefined' ? Notification.permission : 'no-Notification',
+      standalone: window.matchMedia('(display-mode: standalone)').matches,
+      ua: navigator.userAgent.slice(0, 180),
+      sw: 'unknown',
+      subscribed: false,
+    }
+    try {
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration()
+        out.sw = reg ? (reg.active ? 'active' : reg.installing ? 'installing' : reg.waiting ? 'waiting' : 'registered') : 'none'
+        const sub = reg ? await reg.pushManager.getSubscription() : null
+        out.subscribed = !!sub
+      } else out.sw = 'unsupported'
+    } catch (e) {
+      out.sw = 'error: ' + (e.message || e)
+    }
+    await api('/api/diag', out)
+  } catch {}
+}
+
+async function enablePush() {
+  const btn = $('#pushBtn')
+  const old = btn ? btn.textContent : ''
+  if (btn) { btn.disabled = true; btn.textContent = '开启中…' }
+  try {
+    if (!('PushManager' in window)) throw new Error('浏览器没有 PushManager（用 Chrome，且必须是 https）')
+    if (typeof Notification === 'undefined') throw new Error('浏览器没有 Notification')
+    const perm = await Notification.requestPermission()
+    if (perm !== 'granted') throw new Error('通知权限没给（系统设置→应用→Chrome→通知）')
+    const reg = await swReady()
+    let sub = await reg.pushManager.getSubscription()
+    if (!sub) {
+      sub = await withTimeout(
+        reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(S.state.vapid) }),
+        15000,
+        '向 Google 推送服务订阅超时（手机网络问题？稍后再点一次）',
+      )
+    }
+    const r = await api('/api/subscribe', { subscription: sub.toJSON() })
+    if (!r.ok) throw new Error('订阅没存到电脑上')
+    await idbSet('token', S.token)
+    $('#pushBanner').hidden = true
+    alert('推送已开启，锁屏也能收到。')
+    reportDiag({ stage: 'subscribe-ok' })
+    schedule()
+  } catch (e) {
+    alert('开启失败：' + (e.message || e))
+    reportDiag({ stage: 'subscribe-fail', error: String(e.message || e) })
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = old }
+  }
+}
+$('#pushBtn').onclick = enablePush
+
+/* ── IndexedDB（给 service worker 读 token 用） ── */
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('pb', 1)
+    r.onupgradeneeded = () => r.result.createObjectStore('kv')
+    r.onsuccess = () => res(r.result)
+    r.onerror = () => rej(r.error)
+  })
+}
+async function idbSet(k, v) {
+  const db = await idb()
+  return new Promise((res) => {
+    const tx = db.transaction('kv', 'readwrite')
+    tx.objectStore('kv').put(v, k)
+    tx.oncomplete = res
+    tx.onerror = res
+  })
+}
+
+/* ── 走 ── */
+if (S.token) start()
+else { $('#gate').hidden = false; $('#code').focus() }
+</script>
+</body>
+</html>

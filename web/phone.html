@@ -104,7 +104,12 @@
   #log{flex:1;overflow-y:auto;padding:12px 14px 6px;-webkit-overflow-scrolling:touch}
   .msg{margin-bottom:10px;display:flex}
   .msg.user{justify-content:flex-end}
-  .bubble{max-width:86%;padding:10px 13px;border-radius:15px;font-size:14.5px;white-space:pre-wrap;word-break:break-word}
+  .col{max-width:86%;min-width:0;display:flex;flex-direction:column;gap:4px}
+  .msg.user .col{align-items:flex-end}
+  .bubble{padding:10px 13px;border-radius:15px;font-size:14.5px;white-space:pre-wrap;word-break:break-word;max-width:100%}
+  .bubble.long{max-height:8.6em;overflow:hidden;-webkit-mask-image:linear-gradient(#000 72%,transparent 100%);mask-image:linear-gradient(#000 72%,transparent 100%)}
+  .bubble.long.expanded{max-height:none;-webkit-mask-image:none;mask-image:none}
+  .more{font-size:12px;color:var(--accent);padding:2px 4px}
   .msg.user .bubble{background:var(--accent-soft);border:1px solid #2a4c86;border-bottom-right-radius:5px}
   .msg.assistant .bubble{background:var(--card);border:1px solid var(--line);border-bottom-left-radius:5px}
   .msg .time{font-size:10.5px;color:var(--dim);align-self:flex-end;margin:0 6px 3px}
@@ -318,7 +323,7 @@ function renderStats(st, cwd) {
   el.innerHTML =
     '<b>' + st.turns + '</b> 轮 · <b>' + st.steps + '</b> 步 · 入 ' + fmtTok(st.input) +
     ' / 出 ' + fmtTok(st.output) + ' · 缓存 ' + pct(st.cacheHitRate) +
-    ' · 上下文 ' + pct(st.contextUsed)
+    ' · 上下文 ' + (st.contextWindow ? pct(st.contextUsed) : fmtTok(st.lastInput))
 }
 
 function renderTools(st) {
@@ -467,8 +472,13 @@ function renderLog(st) {
   if (log.dataset.key !== key) {
     log.dataset.key = key
     const html = st.messages.map((m) => {
-      const t = `<span class="time">${fmt(m.time)}</span>`
-      return `<div class="msg ${m.role}">${m.role === 'user' ? t : ''}<div class="bubble">${esc(m.text)}</div>${m.role === 'user' ? '' : t}</div>`
+      const t = '<span class="time">' + fmt(m.time) + '</span>'
+      const long = String(m.text || '').length > 420
+      const body =
+        '<div class="col"><div class="bubble' + (long ? ' long' : '') + '">' + esc(m.text) + '</div>' +
+        (long ? '<button class="more">展开</button>' : '') +
+        '</div>'
+      return '<div class="msg ' + m.role + '">' + (m.role === 'user' ? t : '') + body + (m.role === 'user' ? '' : t) + '</div>'
     }).join('')
     log.innerHTML = html || `<div class="empty" id="empty">${esc(st.sessions.length ? '当前会话还没有消息。' : '电脑上还没有打开的会话。')}</div>`
   }
@@ -510,6 +520,15 @@ $('#input').addEventListener('input', (e) => autoGrow(e.target))
 
 $('#stopBtn').onclick = async () => { await api('/api/stop', {}); schedule() }
 
+$('#log').addEventListener('click', (e) => {
+  const btn = e.target.closest('.more')
+  if (!btn) return
+  const bubble = btn.parentElement.querySelector('.bubble')
+  if (!bubble) return
+  const open = bubble.classList.toggle('expanded')
+  btn.textContent = open ? '收起' : '展开'
+})
+
 /* ── 抽屉：切会话 / 设置 ── */
 $('#sessBtn').onclick = () => openSheet('sessions')
 $('#moreBtn').onclick = () => openSheet('more')
@@ -542,7 +561,7 @@ async function openStats() {
   html += kv('缓存读 / 写', fmtTok(s.cacheRead) + ' / ' + fmtTok(s.cacheWrite))
   html += kv('推理 token', fmtTok(s.reasoning))
   html += kv('缓存命中率', pct(s.cacheHitRate))
-  html += kv('上下文', s.contextWindow ? fmtTok(s.lastInput) + ' / ' + fmtTok(s.contextWindow) + '（' + pct(s.contextUsed) + '）' : '—')
+  html += kv('上下文', s.contextWindow ? fmtTok(s.lastInput) + ' / ' + fmtTok(s.contextWindow) + '（' + pct(s.contextUsed) + '）' : fmtTok(s.lastInput) + '（窗口大小未知）')
   html += '<h4 style="margin-top:14px">账户</h4>'
   if (!b || b.ok === false) html += kv('余额', esc((b && b.error) || '未登录'))
   else {

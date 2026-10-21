@@ -6,7 +6,7 @@ import assert from 'node:assert'
 import { Bridge } from '../host/bridge.js'
 
 const store = {
-  config: { approvalViaPhone: true, questionViaPhone: true, pushTurnEnd: false, pushErrors: false, snippetChars: 100, minTurnMs: 0 },
+  config: { approvalViaPhone: true, questionViaPhone: true, pushTurnEnd: false, pushErrors: false, snippetChars: 100, minTurnMs: 0, desktopDelayMs: 0 },
   target: () => null,
   setTarget() {},
   devices: () => [],
@@ -186,3 +186,23 @@ console.log('✓ 历史会话与历史消息回放 通过')
   assert.equal(b5.targetSession(), 'cold-1', '点了历史会话就必须留在它上面')
 }
 console.log('✓ 历史会话可切换 通过')
+
+// 10) 手机在窗口期内答 → 桌面 answerer 根本不该被叫醒（桌面不弹框）
+{
+  const store2 = { ...store, config: { ...store.config, desktopDelayMs: 10000 } }
+  const ctx5 = { get: () => undefined, on: () => () => {} }
+  const b6 = new Bridge(ctx5, store2, pusher)
+  let nextCalled = false
+  const p = b6.onApproval({ agent: { id: 's9' }, toolName: 'bash' }, async () => {
+    nextCalled = true
+    return 'unavailable'
+  })
+  await sleep(30)
+  const id = [...b6.pending.keys()][0]
+  assert.ok(id, '应该有 pending')
+  b6.answer(id, { action: 'allow' })
+  assert.equal(await p, 'allowed-once')
+  await sleep(60)
+  assert.equal(nextCalled, false, '手机先答就不该弹桌面框')
+}
+console.log('✓ 手机优先、桌面不弹框 通过')

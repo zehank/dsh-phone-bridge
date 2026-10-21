@@ -394,7 +394,18 @@ export class Bridge {
 
   async onApproval(req, next) {
     if (!this.store.config.approvalViaPhone) return next()
-    const desktop = next()
+    // 先别叫醒桌面：给手机一个抢先的窗口期，手机在窗口内答了，桌面就根本不弹框
+    // （否则桌面那个对话框不会因为手机答了而自动消失，是他报过的"电脑端一直挂着"）。
+    const delayMs = Math.max(0, Number(this.store.config.desktopDelayMs ?? 6000))
+    let desktopStarted = false
+    let desktopPromise = null
+    let settled = false
+    const startDesktop = () => {
+      if (desktopStarted) return desktopPromise
+      desktopStarted = true
+      desktopPromise = next()
+      return desktopPromise
+    }
     const sid = req?.agent?.id || ''
     const entry = this.addPending({
       id: `ap-${uid()}`,
@@ -419,9 +430,21 @@ export class Bridge {
     const onAbort = () => this.clearPending(entry.id)
     req?.signal?.addEventListener?.('abort', onAbort, { once: true })
     this.logApproval({ id: entry.id, callId: req?.callId || null, tool: entry.tool, sessionId: sid, stage: 'pushed' })
-    const desktopTagged = desktop.then((v) => ({ by: 'desktop', v }), (e) => ({ by: 'desktop-error', e }))
+    const timer = setTimeout(() => {
+      if (!settled) startDesktop()
+    }, delayMs)
     try {
-      const first = await Promise.race([entry.promise.then((v) => ({ by: 'phone', v })), desktopTagged])
+      let first = await Promise.race([
+        entry.promise.then((v) => ({ by: 'phone', v })),
+        new Promise((resolve) => setTimeout(() => resolve({ by: 'timeout' }), delayMs)),
+      ])
+      if (first.by === 'timeout') {
+        // 手机没在窗口内答 → 正常喊出桌面，继续原来的竞速
+        first = await Promise.race([
+          entry.promise.then((v) => ({ by: 'phone', v })),
+          startDesktop().then((v) => ({ by: 'desktop', v }), (e) => ({ by: 'desktop-error', e })),
+        ])
+      }
       this.logApproval({
         id: entry.id,
         callId: req?.callId || null,
@@ -430,11 +453,14 @@ export class Bridge {
         stage: 'decided',
         by: first?.by,
         outcome: first?.v || (first?.e ? 'error' : null),
+        desktopShown: desktopStarted,
       })
       if (first?.by === 'phone') return first.v
       if (first?.by === 'desktop-error') throw first.e
       return first.v
     } finally {
+      settled = true
+      clearTimeout(timer)
       req?.signal?.removeEventListener?.('abort', onAbort)
       this.clearPending(entry.id)
     }

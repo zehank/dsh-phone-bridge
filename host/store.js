@@ -28,6 +28,8 @@ export const DEFAULTS = {
   snippetChars: 220,
   /** 短于这个时长的回合不推送（免得一句话也弹一次） */
   minTurnMs: 4000,
+  /** 审批先只推手机；桌面框延迟这么多毫秒才弹，手机先答就不会弹（0 = 立刻弹） */
+  desktopDelayMs: 6000,
 }
 
 function code6() {

@@ -122,6 +122,16 @@
   .sub{display:flex;align-items:center;gap:10px;margin-top:6px;font-size:12px;color:var(--dim)}
   .sub button{margin-left:auto;color:var(--muted);padding:4px 8px;border-radius:8px;background:var(--card2)}
 
+  /* ── 响铃「跑完叫我」 ── */
+  .chip.hot{background:#3b1220;border-color:#7a2436;color:#ffd7de;animation:pulse 1.1s infinite}
+  #alarm{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:28px;color:#fff;background:radial-gradient(circle at 50% 32%,#43101f 0,#0b0a12 72%)}
+  #alarm .bell{font-size:76px;animation:ring .7s infinite}
+  @keyframes ring{0%,100%{transform:rotate(-9deg)}50%{transform:rotate(9deg)}}
+  #alarm .t{font-size:25px;font-weight:700;letter-spacing:.5px}
+  #alarm .s{font-size:14px;color:#c9aeb8;max-width:80vw}
+  #alarm .hint{font-size:12.5px;color:#8d7683;margin-top:2px;min-height:16px}
+  #alarm .stop{margin-top:14px;background:#ef4444;color:#fff;font-size:19px;font-weight:700;padding:17px 42px;border-radius:999px;width:auto;box-shadow:0 10px 30px rgba(239,68,68,.35)}
+
   /* ── 抽屉 ── */
   #sheet{position:fixed;inset:0;background:rgba(4,8,16,.6);display:flex;align-items:flex-end;z-index:20}
   .sheet-in{width:100%;background:var(--bg2);border-radius:18px 18px 0 0;padding:14px 14px calc(18px + var(--safe-b));max-height:78vh;overflow:auto}
@@ -154,6 +164,7 @@
     <button class="chip" id="chipCwd">工作区</button>
     <button class="chip" id="chipNew">＋会话</button>
     <button class="chip" id="chipSched">定时</button>
+    <button class="chip" id="chipAlarm">🔔 跑完叫我</button>
     <button class="chip" id="chipModel">模型</button>
     <button class="chip" id="chipPerm">权限</button>
     <button class="chip" id="chipMode">模式</button>
@@ -182,12 +193,30 @@
   </footer>
 </div>
 
+<div id="alarm" hidden>
+  <div class="bell">⏰</div>
+  <div class="t" id="alTitle">任务跑完了</div>
+  <div class="s" id="alSub"></div>
+  <div class="hint" id="alHint"></div>
+  <button class="stop" id="alarmStop">停止响铃</button>
+</div>
+
 <div id="sheet" hidden><div class="sheet-in" id="sheetIn"></div></div>
 
 <script>
 const $ = (s) => document.querySelector(s)
 const BUILD = '__BUILD__'
 const S = { token: localStorage.getItem('pb.token') || '', state: null, es: null, timer: null, sheet: null, files: [], presetNames: {}, reloaded: false }
+
+// 安卓 App 里是直接带 ?t=<token> 打开的：存下来、写进 IndexedDB（SW 要用），再把参数从地址栏抹掉
+;(function () {
+  const q = new URLSearchParams(location.search).get('t')
+  if (!q) return
+  S.token = q
+  localStorage.setItem('pb.token', q)
+  try { idbSet('token', q) } catch {}
+  try { history.replaceState(null, '', location.pathname) } catch {}
+})()
 
 const api = async (p, body) => {
   const opt = { headers: { 'content-type': 'application/json', authorization: 'Bearer ' + S.token } }
@@ -235,6 +264,7 @@ async function start() {
   loadPresets()
   connect()
   registerSW()
+  onSwMessage()
   reportDiag({ stage: 'boot' })
 }
 
@@ -295,6 +325,7 @@ function render() {
   renderTools(st.settings)
   renderStats(st.stats, st.cwd)
   renderPush(st)
+  renderAlarm(st)
   renderPending(st)
   renderLog(st)
 }
@@ -367,6 +398,24 @@ $('#chipModel').onclick = () => openSheet('model')
 $('#chipPerm').onclick = () => openSheet('perm')
 $('#chipFile').onclick = () => $('#fileInput').click()
 $('#chipMode').onclick = () => openSheet('mode')
+$('#chipAlarm').onclick = async () => {
+  unlockAudio()
+  const st = S.state
+  if (!st) return
+  const a = st.alarm || {}
+  if (a.ringing) await api('/api/alarm/stop', {})
+  else if (a.armed) await api('/api/alarm/disarm', {})
+  else if (!st.target) return alert('先选一个会话')
+  else await api('/api/alarm/arm', { sessionId: st.target })
+  schedule()
+}
+$('#alarmStop').onclick = async () => {
+  stopRing()
+  await api('/api/alarm/stop', {})
+  schedule()
+}
+// 浏览器只允许「用户点过页面」之后出声：任何一次点击都把音频解锁掉
+document.addEventListener('click', () => unlockAudio(), { passive: true })
 
 $('#fileInput').onchange = async (e) => {
   const picked = [...(e.target.files || [])]
@@ -403,6 +452,122 @@ function renderPush(st) {
         : perm === 'granted'
           ? '还没在这台手机上订阅推送'
           : '开通知才能锁屏收到消息'
+}
+
+/* ── 响铃「跑完叫我」 ────────────────────────────────────────
+   定时器解决不了「不知道跑多久」：所以响铃由宿主在会话掉回空闲那一刻推下来。
+   推送负责叫醒（锁屏也能响），页面开着时这里补真正的循环铃声 + 振动。 */
+const ring = { on: false, ctx: null, timer: null, wake: null, ticks: 0 }
+
+function unlockAudio() {
+  try {
+    if (!ring.ctx) ring.ctx = new (window.AudioContext || window.webkitAudioContext)()
+    if (ring.ctx.state === 'suspended') ring.ctx.resume()
+  } catch {}
+}
+
+function beep(freq, dur) {
+  const c = ring.ctx
+  if (!c || c.state !== 'running') return
+  try {
+    const t = c.currentTime
+    const o = c.createOscillator()
+    const g = c.createGain()
+    o.type = 'square'
+    o.frequency.setValueAtTime(freq, t)
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.exponentialRampToValueAtTime(0.5, t + 0.03)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+    o.connect(g)
+    g.connect(c.destination)
+    o.start(t)
+    o.stop(t + dur + 0.05)
+  } catch {}
+}
+
+function buzz() {
+  try {
+    if (navigator.vibrate) navigator.vibrate([700, 280, 700, 280, 700])
+  } catch {}
+}
+
+function startRing() {
+  if (!ring.on) {
+    ring.on = true
+    ring.ticks = 0
+    unlockAudio()
+    const tick = () => {
+      if (!ring.on) return
+      beep(ring.ticks++ % 2 ? 660 : 880, 0.42)
+      if (ring.ticks % 2 === 1) buzz()
+    }
+    tick()
+    ring.timer = setInterval(tick, 560)
+    if ('wakeLock' in navigator) navigator.wakeLock.request('screen').then((w) => { ring.wake = w }).catch(() => {})
+  }
+  $('#alarm').hidden = false
+  $('#alHint').textContent = ring.ctx && ring.ctx.state === 'running' ? '' : '点一下屏幕才会出声（浏览器限制）'
+}
+
+function stopRing() {
+  if (ring.timer) clearInterval(ring.timer)
+  ring.timer = null
+  ring.on = false
+  try { if (navigator.vibrate) navigator.vibrate(0) } catch {}
+  try { ring.wake?.release?.() } catch {}
+  ring.wake = null
+  $('#alarm').hidden = true
+  closeAlarmNote()
+}
+
+function closeAlarmNote() {
+  try {
+    navigator.serviceWorker.ready
+      .then((reg) => reg.getNotifications({ tag: 'pb-alarm' }))
+      .then((ns) => ns.forEach((n) => n.close()))
+      .catch(() => {})
+  } catch {}
+}
+
+function fmtDur(ms) {
+  const s = Math.max(0, Math.round(Number(ms || 0) / 1000))
+  if (s < 60) return s + ' 秒'
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  if (m < 60) return r ? m + ' 分 ' + r + ' 秒' : m + ' 分钟'
+  return Math.floor(m / 60) + ' 小时 ' + (m % 60) + ' 分'
+}
+
+function renderAlarm(st) {
+  const a = st?.alarm || {}
+  const chip = $('#chipAlarm')
+  if (a.ringing) {
+    chip.textContent = '⏰ 响铃中'
+    chip.classList.add('on', 'hot')
+    $('#alTitle').textContent = a.reason === 'error' ? '跑挂了' : '任务跑完了'
+    $('#alSub').textContent = [a.label || '', a.elapsed ? '用时 ' + fmtDur(a.elapsed) : ''].filter(Boolean).join(' · ')
+    startRing()
+    return
+  }
+  chip.classList.remove('hot')
+  if (ring.on || !$('#alarm').hidden) stopRing()
+  if (a.armed) {
+    chip.textContent = '🔔 ' + (a.label || '会话') + ' 跑完叫我'
+    chip.classList.add('on')
+  } else {
+    chip.textContent = '🔔 跑完叫我'
+    chip.classList.remove('on')
+  }
+}
+
+function onSwMessage() {
+  if (!('serviceWorker' in navigator)) return
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    const d = e.data || {}
+    if (d.type === 'alarm') { unlockAudio(); startRing(); schedule() }
+    else if (d.type === 'alarm-off') { stopRing(); schedule() }
+    else if (d.type === 'refresh') schedule()
+  })
 }
 
 function renderPending(st) {
@@ -801,6 +966,13 @@ async function openSheet(kind) {
       const r = await api('/api/push/test', {})
       alert(r.ok ? '已发送' : '失败：' + (r.error || r.skipped || '未知'))
     })
+    add('安卓 App', '下载安装包', () => { location.href = '/app.apk' })
+    add('测试响铃', '立刻响一次', async () => {
+      unlockAudio()
+      const r = await api('/api/alarm/test', {})
+      if (!r.ok) alert('失败：' + (r.error || '未知'))
+      else { startRing(); schedule() }
+    })
     add('本机地址', location.origin)
     add('页面版本', BUILD)
     add('设备', st.device)
@@ -928,7 +1100,16 @@ async function idbSet(k, v) {
 
 /* ── 走 ── */
 if (S.token) start()
-else { $('#gate').hidden = false; $('#code').focus() }
+else {
+  $('#gate').hidden = false
+  $('#code').focus()
+  // 扫电脑上那张二维码打开时地址栏带 #pair=123456，直接填进去
+  const m = /pair=(\d{6})/.exec(location.hash || '')
+  if (m) {
+    $('#code').value = m[1]
+    try { history.replaceState(null, '', location.pathname) } catch {}
+  }
+}
 </script>
 </body>
 </html>

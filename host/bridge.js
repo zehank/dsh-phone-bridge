@@ -11,6 +11,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
+import { Alarm } from './alarm.js'
 
 const uid = () => randomBytes(6).toString('hex')
 
@@ -53,6 +54,8 @@ export class Bridge {
     this.listAt = 0
     this.balanceCache = null
     this.balanceAt = 0
+    /** 「这个会话跑完叫我」——指定会话 + 响铃（见 alarm.js） */
+    this.alarm = new Alarm({ ctx, store, pusher, broadcast: () => this.broadcast() })
   }
 
   /* ── 生命周期 ───────────────────────────────────────────── */
@@ -78,6 +81,7 @@ export class Bridge {
     this.disposers = []
     this.subscribers.clear()
     this.pending.clear()
+    this.alarm?.dispose?.()
   }
 
   forget(sid) {
@@ -398,7 +402,9 @@ export class Bridge {
     // （否则桌面那个对话框不会因为手机答了而自动消失，是他报过的"电脑端一直挂着"）。
     // 只有手机页面真的连着（SSE 订阅者 > 0）才值得等那几秒；没连就直接弹桌面框，别白等
     const phoneWatching = this.subscribers.size > 0
-    const delayMs = phoneWatching ? Math.max(0, Number(this.store.config.desktopDelayMs ?? 6000)) : 0
+    // 默认 0：手机和桌面同一刻收到，谁先答用谁的。只有把 desktopDelayMs 配成 >0
+    // 才回到「先给手机一个窗口、手机没答再弹桌面」的老策略。
+    const delayMs = phoneWatching ? Math.max(0, Number(this.store.config.desktopDelayMs ?? 0)) : 0
     let desktopStarted = false
     let desktopPromise = null
     let settled = false
@@ -589,6 +595,8 @@ export class Bridge {
     this.histCache.delete(sid)
     this.listCache = null
     this.broadcast()
+    // 指定过「跑完叫我」的会话：不管回合多短、推不推文字，这一声都要响
+    if (started) this.alarm.onIdle(sid, Date.now() - started)
     if (!this.store.config.pushTurnEnd || !started) return
     const elapsed = Date.now() - started
     if (elapsed < (this.store.config.minTurnMs || 0)) return
@@ -607,6 +615,7 @@ export class Bridge {
   }
 
   onError({ agent, error } = {}) {
+    if (agent?.id) this.alarm.onError(agent.id, String(error?.message || error || '未知错误'))
     if (!this.store.config.pushErrors || !agent?.id) return
     this.pusher
       .send({
@@ -773,6 +782,16 @@ export class Bridge {
     return { ok: true, path: real || next }
   }
 
+  /** 置顶 / 取消置顶（手机列表和手机页都吃这一份顺序） */
+  pin(sessionId, on) {
+    if (!sessionId) return { ok: false, error: '没有指定会话' }
+    const pinned = this.store.setPinned(sessionId, on !== false)
+    this.listCache = null
+    this.listAt = 0
+    this.broadcast()
+    return { ok: true, pinned }
+  }
+
   async newSession({ cwd, workspaceId }) {
     const sc = this.ctx.get?.('sessionController')
     if (!sc?.create) throw new Error('sessionController 不可用')
@@ -851,7 +870,11 @@ export class Bridge {
       const v = await sc?.list?.({}, new AbortController().signal)
       for (const it of v?.items || []) {
         if (byId.has(it.sessionId)) continue
+        // 这些是插件/子代理自己跑出来的内部会话（一次性派发、记忆检查点），
+        // 桌面侧边栏不显示，手机上也别出现，否则列表里全是"莫名其妙"的会话
+        if (/^od-/.test(String(it.sessionId))) continue
         const title = it?.projections?.values?.title
+        if (typeof title === 'string' && /^Bounded completed checkpoint/i.test(title)) continue
         byId.set(it.sessionId, {
           id: it.sessionId,
           label:
@@ -865,7 +888,15 @@ export class Bridge {
         })
       }
     } catch {}
-    const rows = [...byId.values()].sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0))
+    // 置顶的排前面（按置顶顺序），其余按最近活动 —— 和电脑上的顺序一致
+    const pinOrder = new Map((this.store.pinned?.() || []).map((id, i) => [id, i]))
+    const rank = (id) => (pinOrder.has(id) ? pinOrder.get(id) : 1e9)
+    const rows = [...byId.values()].sort((a, b) => {
+      const pa = rank(a.id)
+      const pb = rank(b.id)
+      if (pa !== pb) return pa - pb
+      return (b.lastActivity || 0) - (a.lastActivity || 0)
+    })
     this.listCache = rows
     this.listAt = Date.now()
     return rows
@@ -939,6 +970,8 @@ export class Bridge {
       cwd: this.currentCwd(target),
       workspaces: this.workspaces(),
       vapid: this.pusher.publicKey,
+      alarm: this.alarm.status(),
+      pinned: this.store.pinned ? this.store.pinned() : [],
       push: {
         enabled: !!this.store.config.pushEnabled,
         subscribed: this.pusher.subscribed().length > 0,

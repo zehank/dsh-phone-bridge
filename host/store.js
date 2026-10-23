@@ -28,8 +28,13 @@ export const DEFAULTS = {
   snippetChars: 220,
   /** 短于这个时长的回合不推送（免得一句话也弹一次） */
   minTurnMs: 4000,
-  /** 审批先只推手机；桌面框延迟这么多毫秒才弹，手机先答就不会弹（0 = 立刻弹） */
-  desktopDelayMs: 6000,
+  /** 审批并发：手机和桌面同时立刻收到（0 = 不延迟）。>0 才走「先只给手机」的老策略 */
+  desktopDelayMs: 0,
+  /** 「跑完叫我」：响铃后每隔多久再推一次、最多再推几次（0 = 只推一次） */
+  alarmRepeatMs: 20000,
+  alarmMaxReps: 6,
+  /** 响铃走不走 Web Push（关掉就只靠页面开着时本地响） */
+  alarmPushes: true,
 }
 
 function code6() {
@@ -57,6 +62,7 @@ export class Store {
       code: typeof st.code === 'string' && /^\d{6}$/.test(st.code) ? st.code : code6(),
       devices: Array.isArray(st.devices) ? st.devices : [],
       targetSessionId: typeof st.targetSessionId === 'string' ? st.targetSessionId : null,
+      pinned: Array.isArray(st.pinned) ? st.pinned.filter((x) => typeof x === 'string') : [],
     }
     this.fails = []
     this.persistState()
@@ -160,6 +166,20 @@ export class Store {
     this.state.targetSessionId = id || null
     this.persistState()
     return this.state.targetSessionId
+  }
+
+  /** 手机会话列表的置顶（按置顶顺序排在最前） */
+  pinned() {
+    return this.state.pinned || []
+  }
+
+  setPinned(id, on) {
+    const set = new Set(this.pinned())
+    if (on) set.add(id)
+    else set.delete(id)
+    this.state.pinned = [...set]
+    this.persistState()
+    return this.state.pinned
   }
 
   load(file, fallback) {

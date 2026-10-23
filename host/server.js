@@ -116,7 +116,13 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
     let qr = ''
     if (url) {
       try {
-        qr = await QRCode.toString(url, { type: 'svg', margin: 1, width: 220, errorCorrectionLevel: 'M' })
+        // 二维码里带配对码：App 扫一下就把地址和码都拿到，普通相机扫开 PWA 也会自动填码
+        qr = await QRCode.toString(`${url}#pair=${store.code()}`, {
+          type: 'svg',
+          margin: 1,
+          width: 220,
+          errorCorrectionLevel: 'M',
+        })
       } catch {}
     }
     return {
@@ -138,6 +144,8 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
         lastError: pusher.lastError,
       },
       sessions: bridge.liveSessions(),
+      watching: bridge.subscribers.size,
+      appDiag: store.load('app-diag.json', []),
       client: store.load('diag.json', null),
       build: BUILD,
       approvals: store.load('approvals.json', []),
@@ -379,6 +387,11 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
       }
     }
 
+    if (pathname === '/api/pin' && req.method === 'POST') {
+      const body = await readBody(req)
+      return json(res, 200, bridge.pin(body.sessionId, body.pinned !== false))
+    }
+
     if (pathname === '/api/session' && req.method === 'POST') {
       const body = await readBody(req)
       try {
@@ -414,6 +427,36 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
       }
     }
 
+    /* 「指定会话跑完叫我」：arm 之后由 alarm.js 等 agent/status 掉下来那一刻响 */
+    if (pathname === '/api/alarm/arm' && req.method === 'POST') {
+      const body = await readBody(req)
+      const sid = String(body.sessionId || bridge.targetSession() || '')
+      if (!sid) return json(res, 200, { ok: false, error: '没有可指定的会话' })
+      const label = bridge.liveSessions().find((s) => s.id === sid)?.label || bridge.labels?.get?.(sid) || 'DSH'
+      const r = bridge.alarm.arm(sid, label)
+      ctx.logger?.info?.(`phone-bridge: ${device.name} 指定「跑完叫我」→ ${label}（${sid}）`)
+      return json(res, 200, { ...r, ...bridge.snapshot(device.name) })
+    }
+
+    if (pathname === '/api/alarm/disarm' && req.method === 'POST') {
+      const r = bridge.alarm.disarm()
+      return json(res, 200, { ...r, ...bridge.snapshot(device.name) })
+    }
+
+    if (pathname === '/api/alarm/stop' && req.method === 'POST') {
+      const r = bridge.alarm.stop(device.name)
+      ctx.logger?.info?.(`phone-bridge: ${device.name} 按了停止响铃`)
+      return json(res, 200, { ...r, ...bridge.snapshot(device.name) })
+    }
+
+    if (pathname === '/api/alarm/test' && req.method === 'POST') {
+      const body = await readBody(req)
+      const sid = String(body.sessionId || bridge.targetSession() || '')
+      const label = bridge.liveSessions().find((s) => s.id === sid)?.label || bridge.labels?.get?.(sid) || 'DSH'
+      bridge.alarm.test(sid || null, label)
+      return json(res, 200, { ok: true, ...bridge.snapshot(device.name) })
+    }
+
     if (pathname === '/api/stop' && req.method === 'POST') {
       const body = await readBody(req)
       return json(res, 200, await bridge.stop(body.sessionId))
@@ -436,6 +479,12 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
       const body = await readBody(req)
       const rec = { ...body, device: device.name, receivedAt: Date.now() }
       store.save('diag.json', rec)
+      // 原生 App 的自检记录留最近 40 条，方便在电脑上回看它到底连没连上
+      try {
+        const ring = store.load('app-diag.json', [])
+        ring.push(rec)
+        store.save('app-diag.json', ring.slice(-40))
+      } catch {}
       ctx.logger?.info?.(`phone-bridge: 手机上报 ${JSON.stringify(rec).slice(0, 300)}`)
       return json(res, 200, { ok: true })
     }
@@ -478,6 +527,23 @@ export function createServer({ ctx, store, bridge, pusher, webRoot }) {
           'cache-control': 'no-store',
         })
         return res.end(html)
+      }
+
+      /* 安卓 App 安装包：手机直接在这个域名下点开就能装，不用 adb */
+      if (pathname === '/app.apk') {
+        try {
+          const data = fs.readFileSync(path.join(webRoot, 'phonebridge.apk'))
+          res.writeHead(200, {
+            'content-type': 'application/vnd.android.package-archive',
+            'content-disposition': 'attachment; filename="phonebridge.apk"',
+            'content-length': data.length,
+            'cache-control': 'no-store',
+          })
+          return res.end(data)
+        } catch {
+          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+          return res.end('还没有 APK：在插件目录跑 android/build.sh，再把 phonebridge.apk 拷进 web/')
+        }
       }
 
       if (pathname === '/manifest.webmanifest') {

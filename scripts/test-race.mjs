@@ -5,11 +5,16 @@
 import assert from 'node:assert'
 import { Bridge } from '../host/bridge.js'
 
+const mem = {}
 const store = {
   config: { approvalViaPhone: true, questionViaPhone: true, pushTurnEnd: false, pushErrors: false, snippetChars: 100, minTurnMs: 0, desktopDelayMs: 0 },
   target: () => null,
   setTarget() {},
   devices: () => [],
+  load: (f, d) => (f in mem ? mem[f] : d),
+  save: (f, v) => ((mem[f] = v), true),
+  pinned: () => [],
+  setPinned: () => [],
 }
 const sent = []
 const pusher = { publicKey: 'k', lastError: null, subscribed: () => [], send: async (p) => { sent.push(p); return { sent: 1 } } }
@@ -238,3 +243,19 @@ console.log('✓ 手机优先、桌面不弹框 通过')
   assert.equal(await p, 'allowed-once')
 }
 console.log('✓ 手机没连就不延迟 通过')
+
+// 11) 默认不延迟：手机连着也立刻叫醒桌面（配置里 desktopDelayMs 缺省 = 0）
+{
+  const store3 = { ...store, config: { approvalViaPhone: true, questionViaPhone: true, pushTurnEnd: false, pushErrors: false, snippetChars: 100, minTurnMs: 0 } }
+  const b7 = new Bridge({ get: () => undefined, on: () => () => {} }, store3, pusher)
+  b7.subscribers.add({ write() {} })
+  let nextCalled = false
+  const p = b7.onApproval({ agent: { id: 's10' }, toolName: 'bash' }, async () => {
+    nextCalled = true
+    return 'allowed-once'
+  })
+  await sleep(40)
+  assert.equal(nextCalled, true, '默认配置下桌面必须立刻收到，不再等手机')
+  assert.equal(await p, 'allowed-once')
+}
+console.log('✓ 默认不延迟（手机连着也立刻并发）通过')
